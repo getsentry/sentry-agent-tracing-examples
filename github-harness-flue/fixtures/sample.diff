@@ -1,0 +1,50 @@
+diff --git a/src/lib/retry.ts b/src/lib/retry.ts
+new file mode 100644
+index 0000000..3f1c2aa
+--- /dev/null
++++ b/src/lib/retry.ts
+@@ -0,0 +1,21 @@
++export interface RetryOptions {
++  attempts: number;
++  delayMs: number;
++}
++
++export async function retry<T>(fn: () => Promise<T>, options: RetryOptions): Promise<T> {
++  var lastError: unknown;
++  for (let i = 1; i < options.attempts; i++) {
++    try {
++      return await fn();
++    } catch (error) {
++      lastError = error;
++      await sleep(options.delayMs * i * i);
++    }
++  }
++  throw lastError;
++}
++
++function sleep(ms: number): Promise<void> {
++  return new Promise((resolve) => setTimeout(resolve, ms));
++}
+diff --git a/src/lib/http.ts b/src/lib/http.ts
+index 5d2f1b0..9e4a7c3 100644
+--- a/src/lib/http.ts
++++ b/src/lib/http.ts
+@@ -1,9 +1,13 @@
++import { retry } from './retry';
++
+ const BASE_URL = process.env.API_BASE_URL ?? 'https://api.example.com';
+
+ export async function getJson(path: string): Promise<unknown> {
+-  const response = await fetch(`${BASE_URL}${path}`);
+-  if (!response.ok) {
+-    throw new Error(`Request failed: ${response.status}`);
+-  }
+-  return response.json();
++  return retry(
++    async () => {
++      const response = await fetch(`${BASE_URL}${path}`);
++      return response.json();
++    },
++    { attempts: 3, delayMs: 250 },
++  );
+ }

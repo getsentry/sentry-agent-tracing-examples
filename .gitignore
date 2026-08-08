@@ -1,0 +1,7 @@
+.DS_Store
+
+# Safety net on top of each demo's own .gitignore — never commit real env files.
+.env
+.env.*
+!.env.example
+node_modules/

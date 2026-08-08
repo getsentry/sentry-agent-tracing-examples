@@ -1,0 +1,45 @@
+# Copy this file to .github/workflows/review.yml in the repository the agent
+# should review. It assumes this project sits at the repository root.
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Export the PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr diff ${{ github.event.pull_request.number }} > pr.diff
+      - name: Run the review agent
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_TRACES_SAMPLE_RATE: "1"
+          SENTRY_ENVIRONMENT: ci
+          SENTRY_RELEASE: ${{ github.sha }}
+          SENTRY_AI_RECORD_INPUTS: "true"
+          SENTRY_AI_RECORD_OUTPUTS: "true"
+          SENTRY_ACCESS_TOKEN: ${{ secrets.SENTRY_ACCESS_TOKEN }}
+          SENTRY_ORG_SLUG: sentry-developer-experience
+          SENTRY_APP_PROJECT_SLUG: github-harness-flue-app
+          POST_TO_GITHUB: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          npx flue run src/agents/review.ts \
+            --message 'Review the diff at pr.diff and post your review.'

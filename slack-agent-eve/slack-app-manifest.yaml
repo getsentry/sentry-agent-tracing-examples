@@ -1,0 +1,33 @@
+# Slack app manifest for Lunchbot (create app "From a manifest" at api.slack.com/apps).
+# Slack accepts the manifest even with this placeholder request_url — verification is
+# deferred for manifest-created apps, but no events are delivered until it passes.
+# After install: run the agent + tunnel, then set the real URL under App Settings >
+# Event Subscriptions so Slack's url_verification challenge can succeed.
+display_information:
+  name: Lunchbot
+  description: "DoorDash group-lunch picker: post a group-order link, pick from 3 in-budget options"
+  background_color: "#eb1700"
+features:
+  bot_user:
+    display_name: lunchbot
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read # app_mention events
+      - chat:write # post replies in threads
+      - im:history # message.im events (DMs)
+      - im:write # eve delivers HITL/auth prompts via DM
+      - channels:history # message.channels events — the post-a-link-no-mention trigger + thread context
+      - groups:history # same, for private channels
+settings:
+  event_subscriptions:
+    request_url: https://YOUR-PUBLIC-URL/eve/v1/slack
+    bot_events:
+      - app_mention
+      - message.im
+      - message.channels
+      - message.groups
+  org_deploy_enabled: false
+  socket_mode_enabled: false # eve's Slack channel is webhook-based; Socket Mode must stay off
+  token_rotation_enabled: false

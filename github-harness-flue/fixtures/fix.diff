@@ -1,0 +1,47 @@
+diff --git a/src/lib/http.ts b/src/lib/http.ts
+index 6bfc46f..2d5de40 100644
+--- a/src/lib/http.ts
++++ b/src/lib/http.ts
+@@ -6,8 +6,11 @@ export async function getJson(path: string): Promise<unknown> {
+   return retry(
+     async () => {
+       const response = await fetch(`${BASE_URL}${path}`);
++      if (!response.ok) {
++        throw new Error(`Request failed: ${response.status}`);
++      }
+       return response.json();
+     },
+-    { attempts: 3, delayMs: 250 },
++    { attempts: 3, baseDelayMs: 250 },
+   );
+ }
+diff --git a/src/lib/retry.ts b/src/lib/retry.ts
+index 03905ee..2c6287e 100644
+--- a/src/lib/retry.ts
++++ b/src/lib/retry.ts
+@@ -1,16 +1,21 @@
+ export interface RetryOptions {
+   attempts: number;
+-  delayMs: number;
++  baseDelayMs: number;
+ }
+ 
+ export async function retry<T>(fn: () => Promise<T>, options: RetryOptions): Promise<T> {
+-  var lastError: unknown;
+-  for (let i = 1; i < options.attempts; i++) {
++  if (options.attempts < 1) {
++    throw new RangeError(`attempts must be >= 1, got ${options.attempts}`);
++  }
++  let lastError: unknown;
++  for (let i = 1; i <= options.attempts; i++) {
+     try {
+       return await fn();
+     } catch (error) {
+       lastError = error;
+-      await sleep(options.delayMs * i * i);
++      if (i < options.attempts) {
++        await sleep(options.baseDelayMs * i * i);
++      }
+     }
+   }
+   throw lastError;

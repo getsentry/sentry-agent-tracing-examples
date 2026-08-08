@@ -1,0 +1,258 @@
+// flue-blueprint: tooling/sentry@1
+
+import {
+	type ContentOption,
+	createOpenTelemetryInstrumentation,
+	type GenAIContentType,
+	truncateContent,
+} from '@flue/opentelemetry';
+import { type FlueObservation, instrument } from '@flue/runtime';
+import * as Sentry from '@sentry/node';
+
+const recordInputs = process.env.SENTRY_AI_RECORD_INPUTS === 'true';
+const recordOutputs = process.env.SENTRY_AI_RECORD_OUTPUTS === 'true';
+const tracesSampleRate = clampRate(process.env.SENTRY_TRACES_SAMPLE_RATE, 0);
+
+// Sentry ships integrations that patch AI provider SDKs directly. Flue's
+// instrumentation already emits one `chat` span per model turn, so those
+// integrations would double-count every model call.
+const SENTRY_AI_PROVIDER_INTEGRATIONS = new Set([
+	'Anthropic_AI',
+	'OpenAI',
+	'Google_GenAI',
+	'LangChain',
+	'LangGraph',
+	'VercelAI',
+]);
+
+Sentry.init({
+	dsn: process.env.SENTRY_DSN,
+	enabled: Boolean(process.env.SENTRY_DSN),
+	environment: process.env.SENTRY_ENVIRONMENT ?? process.env.NODE_ENV,
+	release: process.env.SENTRY_RELEASE,
+	tracesSampleRate,
+	// Stream spans to Sentry as each one finishes, so gen_ai children that
+	// complete after their parent span are not lost.
+	traceLifecycle: 'stream',
+	streamGenAiSpans: true,
+	enableLogs: true,
+	integrations: (defaults) =>
+		defaults.filter((integration) => !SENTRY_AI_PROVIDER_INTEGRATIONS.has(integration.name)),
+});
+
+// `Sentry.init` registered Sentry as the global OTel tracer provider, so
+// Flue's spans flow to Sentry without further wiring. Content capture is
+// on by default in the adapter; `contentPolicy()` narrows it to what the
+// record flags allow. The instrumentation is keyed, so a dev reload
+// replaces the previous registration instead of stacking a duplicate.
+if (tracesSampleRate > 0) {
+	instrument(createOpenTelemetryInstrumentation({ content: contentPolicy() }));
+}
+
+// A failed submission emits a rich `operation` failure first (the original
+// error, with the throw-site stack on the live `errorInfo`) and then a
+// `submission_settled` whose durable `error` collapses non-Flue causes to a
+// generic internal-error payload. Capture the operation and remember its
+// submissionId so the settlement is skipped; a settlement with no captured
+// operation (reconciled after a crash) is captured from its own `errorInfo`.
+const capturedFailedSubmissions = new Set<string>();
+
+// Best-effort flush of buffered events (notably Sentry Logs, which the SDK
+// batches) on shutdown. Never call process.exit() here — Flue's generated
+// server handles SIGINT/SIGTERM, awaits its lifecycle stop, and exits with
+// the correct code; this listener only flushes within that window. It is not
+// a delivery guarantee: the server exits as soon as its stop resolves and
+// Node does not await promises started by signal listeners, so a flush still
+// in flight can be cut short. Traces and issues are sent during the run;
+// only very-recently-buffered logs are at risk.
+const flush = () => void Sentry.flush(2000);
+if (process.env.SENTRY_DSN) {
+	process.on('SIGINT', flush);
+	process.on('SIGTERM', flush);
+}
+
+instrument({
+	// Keyed registration: on a dev reload this module re-evaluates while the
+	// runtime's registry persists, and the newest install wins — the previous
+	// bridge (and its signal listeners) is disposed, so no event is ever
+	// double-reported.
+	key: Symbol.for('flue.sentry.bridge'),
+	observe(event) {
+		if (event.type === 'operation' && event.isError) {
+			captureTerminalFailure(event.errorInfo ?? event.error, correlationTags(event), {
+				durationMs: event.durationMs,
+				operationKind: event.operationKind,
+			});
+			if (event.submissionId) capturedFailedSubmissions.add(event.submissionId);
+			return;
+		}
+		if (event.type === 'submission_settled') {
+			const alreadyCaptured = capturedFailedSubmissions.delete(event.submissionId);
+			if (event.outcome === 'failed' && !alreadyCaptured) {
+				captureTerminalFailure(event.errorInfo ?? event.error, correlationTags(event));
+			}
+			return;
+		}
+		if (event.type === 'submission_recovery') {
+			recordRecoveryBreadcrumb(event);
+			return;
+		}
+		if (event.type === 'log') {
+			Sentry.logger[event.level](event.message, logAttributes(event));
+		}
+	},
+	interceptor: (_operation, _ctx, next) => next(),
+	async dispose() {
+		process.off('SIGINT', flush);
+		process.off('SIGTERM', flush);
+		await Sentry.flush(2000);
+	},
+});
+
+// A coordinator retrying or reconciling a stuck submission — not yet a
+// terminal outcome, and 'deferred'/'agent_unavailable' recur on every retry
+// wake, so this stays a breadcrumb rather than a captured issue. The one
+// terminal outcome, 'terminated', always co-occurs with a `submission_settled`
+// outcome:'failed' event that the branch above already captures; recording it
+// here too would duplicate that issue.
+function recordRecoveryBreadcrumb(
+	event: Extract<FlueObservation, { type: 'submission_recovery' }>,
+): void {
+	Sentry.addBreadcrumb({
+		category: 'flue.submission_recovery',
+		level: event.outcome === 'terminated' ? 'error' : 'warning',
+		message: `${event.operation}: ${event.outcome}`,
+		data: {
+			...correlationTags(event),
+			'flue.recovery.operation': event.operation,
+			'flue.recovery.outcome': event.outcome,
+			...(event.attemptCount !== undefined ? { 'flue.recovery.attempt_count': event.attemptCount } : {}),
+			...(event.maxAttempts !== undefined ? { 'flue.recovery.max_attempts': event.maxAttempts } : {}),
+			...(event.errorInfo ? { 'error.type': event.errorInfo.type } : {}),
+		},
+	});
+}
+
+function captureTerminalFailure(
+	error: unknown,
+	tags: Record<string, string>,
+	context?: Record<string, unknown>,
+): void {
+	Sentry.withScope((scope) => {
+		scope.setTags(tags);
+		scope.setLevel('error');
+		if (context) scope.setContext('flue.incident', context);
+		Sentry.captureException(toError(error));
+	});
+}
+
+// Tag keys use the `flue.*` prefix — the same names the trace spans carry —
+// so pivoting on `flue.instance.id` in Sentry's search finds every issue,
+// log, and span from a single agent instance.
+function correlationTags(event: FlueObservation): Record<string, string> {
+	const tags: Record<string, string> = {};
+	if (event.instanceId) tags['flue.instance.id'] = event.instanceId;
+	if (event.agentName) tags['flue.agent.name'] = event.agentName;
+	if (event.conversationId) tags['flue.conversation.id'] = event.conversationId;
+	if (event.submissionId) tags['flue.submission.id'] = event.submissionId;
+	if (event.harness) tags['flue.harness'] = event.harness;
+	if (event.session) tags['flue.session'] = event.session;
+	if (event.parentSession) tags['flue.parent_session'] = event.parentSession;
+	if (event.operationId) tags['flue.operation.id'] = event.operationId;
+	if (event.taskId) tags['flue.task.id'] = event.taskId;
+	return tags;
+}
+
+type LogAttribute = string | number | boolean;
+
+function logAttributes(
+	event: Extract<FlueObservation, { type: 'log' }>,
+): Record<string, LogAttribute> {
+	const attributes: Record<string, LogAttribute> = {};
+	for (const [key, value] of Object.entries(correlationTags(event))) attributes[key] = value;
+	for (const [key, value] of Object.entries(event.attributes ?? {})) {
+		const scrubbed = scrub(value);
+		attributes[`flue.log.${key}`] =
+			typeof scrubbed === 'string' || typeof scrubbed === 'number' || typeof scrubbed === 'boolean'
+				? scrubbed
+				: stringify(scrubbed);
+	}
+	return attributes;
+}
+
+// The content policy for trace spans. With both record flags off, no model
+// or tool content reaches Sentry at all (`content: false`). With either flag
+// on, the transform admits only the enabled direction, scrubs sensitive keys,
+// and tightens the adapter's default 56 KiB budget to 16 KiB per attribute.
+function contentPolicy(): ContentOption {
+	if (!recordInputs && !recordOutputs) return false;
+	return {
+		transform(content, scope) {
+			if (isInputContent(scope.contentType) && !recordInputs) return undefined;
+			if (isOutputContent(scope.contentType) && !recordOutputs) return undefined;
+			return truncateContent(scrub(content), { maxBytes: 16_384 });
+		},
+	};
+}
+
+function isInputContent(contentType: GenAIContentType): boolean {
+	return (
+		contentType === 'input_messages' ||
+		contentType === 'system_instructions' ||
+		contentType === 'tool_definitions' ||
+		contentType === 'tool_description' ||
+		contentType === 'tool_arguments'
+	);
+}
+
+function isOutputContent(contentType: GenAIContentType): boolean {
+	return (
+		contentType === 'output_messages' ||
+		contentType === 'tool_result' ||
+		contentType === 'exception_message' ||
+		contentType === 'exception_stacktrace'
+	);
+}
+
+const SENSITIVE_KEY = /api[-_]?key|authorization|cookie|dsn|password|secret|token/i;
+
+function scrub(value: unknown, seen = new WeakSet<object>(), depth = 0): unknown {
+	if (depth > 8) return '[truncated]';
+	if (value instanceof Error) return { name: value.name, message: value.message };
+	if (value === null || typeof value !== 'object') return value;
+	if (seen.has(value)) return '[circular]';
+	seen.add(value);
+	if (Array.isArray(value)) return value.map((item) => scrub(item, seen, depth + 1));
+	return Object.fromEntries(
+		Object.entries(value).map(([key, nested]) => [
+			key,
+			SENSITIVE_KEY.test(key) ? '[redacted]' : scrub(nested, seen, depth + 1),
+		]),
+	);
+}
+
+function toError(value: unknown): Error {
+	if (value instanceof Error) return value;
+	if (value && typeof value === 'object') {
+		const source = value as { name?: unknown; message?: unknown; stack?: unknown };
+		const error = new Error(typeof source.message === 'string' ? source.message : stringify(value));
+		if (typeof source.name === 'string') error.name = source.name;
+		if (typeof source.stack === 'string') error.stack = source.stack;
+		return error;
+	}
+	return new Error(typeof value === 'string' ? value : stringify(value));
+}
+
+function stringify(value: unknown): string {
+	try {
+		return JSON.stringify(value) ?? String(value);
+	} catch {
+		return String(value);
+	}
+}
+
+function clampRate(value: string | undefined, fallback: number): number {
+	if (value === undefined) return fallback;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+}
