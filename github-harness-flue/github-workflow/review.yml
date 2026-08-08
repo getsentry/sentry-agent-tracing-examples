@@ -33,8 +33,8 @@ jobs:
           SENTRY_AI_RECORD_INPUTS: "true"
           SENTRY_AI_RECORD_OUTPUTS: "true"
           SENTRY_ACCESS_TOKEN: ${{ secrets.SENTRY_ACCESS_TOKEN }}
-          SENTRY_ORG_SLUG: sentry-developer-experience
-          SENTRY_APP_PROJECT_SLUG: github-harness-flue-app
+          SENTRY_ORG_SLUG: your-org-slug
+          SENTRY_APP_PROJECT_SLUG: your-app-project-slug
           POST_TO_GITHUB: "true"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}

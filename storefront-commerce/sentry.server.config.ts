@@ -14,8 +14,8 @@ Sentry.init({
   // Note on stack-trace in-app frames: under `next dev` (Turbopack) the SDK
   // misclassifies frames and Sentry ingest overrides any client-side
   // correction, so the fix lives in the project's Stack Trace Rules
-  // (Settings → Issue Grouping), not here. See ISSUE-turbopack-dev-in-app.md
-  // at the repo root.
+  // (Settings → Issue Grouping), not here. See
+  // https://github.com/getsentry/sentry-javascript/issues/23176
   integrations: [
     // Turns the AI SDK's telemetry into gen_ai.* agent spans. `force` keeps
     // the semantic span names even when the build bundles the `ai` package;

@@ -41,8 +41,6 @@ hardcoded; missing optional vars degrade gracefully.
   and reading the results in Sentry, and a comparison of the three
   instrumentation approaches.
 - Each demo's own `README.md` — setup, run commands, and demo-specific notes.
-- **[NEXT.md](NEXT.md)** — handoff state: first-test checklist, open verification
-  items, and the DoorDash group-lunch build notes (verified dd-cli findings).
 - [`research/`](research/) — the four framework deep-dives (Eve, Flue,
   AI SDK/Commerce, Sentry agent tracing) the demos were built from: verbatim API
   surfaces, exact versions, gotchas. Check here before re-deriving anything.
