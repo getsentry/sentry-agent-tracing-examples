@@ -8,6 +8,7 @@
 	"scripts": {
 		"demo": "flue run src/agents/review.ts --message 'Review the diff at fixtures/sample.diff and post your review.'",
 		"demo:fix": "flue run src/agents/review.ts --message 'Review the diff at fixtures/fix.diff and post your review.'",
+		"demo:tool-error": "flue run src/agents/review.ts --message 'Review the diff at fixtures/latest.diff and post your review. If that path fails, fall back to fixtures/sample.diff.'",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
