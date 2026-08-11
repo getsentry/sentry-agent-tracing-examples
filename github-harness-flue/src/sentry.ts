@@ -35,6 +35,20 @@ const SENTRY_AI_PROVIDER_INTEGRATIONS = new Set([
 	'WorkersAI',
 ]);
 
+// One `flue run` is one submission, but a delegation opens a *child*
+// conversation with its own id, and the adapter emits that child id as
+// `gen_ai.conversation.id`. Sentry's Conversations view groups strictly by
+// that attribute, so one review splits into three rows — lead, correctness
+// reviewer, style reviewer. Flue records the parent link durably
+// (`ensureChildConversation`) but never puts it on the span, so rebuild it
+// here: the first conversation observed for a submission is its root.
+const rootConversationBySubmission = new Map<string, string>();
+
+// Child conversation id → the subagent that owns it. The envelope's
+// `agentName` is the top-level agent, so a subagent's `chat` span arrives
+// labelled with the lead's name; only `task_start` knows the real one.
+const subagentByConversation = new Map<string, string>();
+
 Sentry.init({
 	dsn: process.env.SENTRY_DSN,
 	enabled: Boolean(process.env.SENTRY_DSN),
@@ -56,6 +70,23 @@ Sentry.init({
 				const raw = attributes[`flue.tool.call.${kind}`];
 				if (raw !== undefined && attributes[`gen_ai.tool.call.${kind}`] === undefined) {
 					attributes[`gen_ai.tool.call.${kind}`] = raw;
+				}
+			}
+
+			const ownConversation = attributes['gen_ai.conversation.id'];
+			if (typeof ownConversation === 'string') {
+				const subagent = subagentByConversation.get(ownConversation);
+				if (subagent !== undefined) attributes['gen_ai.agent.name'] = subagent;
+
+				const submissionId = attributes['flue.submission.id'];
+				const root =
+					typeof submissionId === 'string'
+						? rootConversationBySubmission.get(submissionId)
+						: undefined;
+				if (root !== undefined && root !== ownConversation) {
+					// Keep the child id — it is flue's real conversation record.
+					attributes['flue.conversation.id'] = ownConversation;
+					attributes['gen_ai.conversation.id'] = root;
 				}
 			}
 		}
@@ -105,6 +136,17 @@ instrument({
 	// double-reported.
 	key: Symbol.for('flue.sentry.bridge'),
 	observe(event) {
+		// Runs before the branches below so the maps are populated while the
+		// spans they describe are still open; `beforeSendSpan` reads them when
+		// each span ends.
+		if (event.submissionId && event.conversationId) {
+			if (!rootConversationBySubmission.has(event.submissionId)) {
+				rootConversationBySubmission.set(event.submissionId, event.conversationId);
+			}
+			if (event.type === 'task_start' && event.agent) {
+				subagentByConversation.set(event.conversationId, event.agent);
+			}
+		}
 		if (event.type === 'operation' && event.isError) {
 			captureTerminalFailure(event.errorInfo ?? event.error, correlationTags(event), {
 				durationMs: event.durationMs,
