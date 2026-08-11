@@ -10,7 +10,7 @@ trace in Sentry — three different frameworks, three different ways the same
 
 | Directory | Framework | Channel | Demonstrates |
 | --- | --- | --- | --- |
-| [`slack-agent-eve/`](slack-agent-eve/) | [Eve](https://eve.dev) (Vercel's agent framework) | Slack (group-order links, @mentions, DMs) + local TUI | A DoorDash group-lunch agent (via local `dd-cli`) traced through Eve's OTel hook + Sentry's `vercelAIIntegration`; a tool with its own nested LLM call; Slack threads as Sentry Conversations |
+| [`slack-agent-eve/`](slack-agent-eve/) | [Eve](https://eve.dev) (Vercel's agent framework) | Slack (ask for a meal, group-order links, @mentions, DMs) + local TUI | A DoorDash ordering agent (via `dd-cli`, run in a Vercel Sandbox once deployed) traced through Eve's OTel telemetry integration; a tool with its own nested LLM call; Slack threads as Sentry Conversations; calorie and protein wide events feeding a dashboard and alerts |
 | [`storefront-commerce/`](storefront-commerce/) | Vercel AI SDK + AI Elements on Next.js Commerce | In-app chat panel | Agent tracing next to classic app tracing: `db.query` spans nesting under tool spans, generative UI, Queries insights, per-session Conversations |
 | [`github-harness-flue/`](github-harness-flue/) | [Flue](https://flueframework.com) | GitHub Action (`flue run`) | A multi-agent CI harness (lead + 2 parallel subagents) traced via Flue's official Sentry blueprint; logs, issues, and `flue.*` cross-signal tags |
 

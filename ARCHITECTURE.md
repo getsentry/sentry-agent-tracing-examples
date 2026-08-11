@@ -5,8 +5,8 @@ trace, and how to exercise it. All three demos target the same Sentry data
 model — `gen_ai.invoke_agent` containers with `gen_ai.*` model-call and
 `gen_ai.execute_tool` children — but produce it three different ways:
 
-1. **slack-agent-eve** — the framework (Eve) emits Vercel AI SDK telemetry;
-   Sentry's `vercelAIIntegration` rewrites it into `gen_ai.*` spans.
+1. **slack-agent-eve** — the framework (Eve) registers `@ai-sdk/otel` with the
+   AI SDK, which emits `gen_ai.*` spans straight into Sentry's tracer provider.
 2. **storefront-commerce** — the app calls the AI SDK directly; the same
    integration instruments it, and hand-written `db.query` spans nest under
    the agent's tool spans.
@@ -19,31 +19,34 @@ passed through unchanged so Sentry's pricing database resolves cost),
 deliberately ON — these are demos, and seeing full conversations on spans is
 the point. All Sentry SDKs are pinned at 10.69.0.
 
-> **A note on model-call span names.** Sentry's `vercelAIIntegration`
-> (demos 1 and 2) classifies AI SDK model calls as `generate_content`, so
-> those spans render as `generate_content <model>` with op
-> `gen_ai.generate_content` (verified in `@sentry/core@10.69.0`'s span-name
-> map). Flue's adapter (demo 3) emits `chat <model>` / `gen_ai.chat` spans
-> directly. Same dashboards, same token/cost handling — just two valid
-> `gen_ai.operation.name` values from the spec.
+> **A note on model-call span names.** Sentry's `vercelAIIntegration` (demo 2)
+> classifies AI SDK model calls as `generate_content`, so those spans render as
+> `generate_content <model>` with op `gen_ai.generate_content`. The
+> `@ai-sdk/otel` adapter (demo 1) and Flue's adapter (demo 3) emit
+> `chat <model>` instead. Same dashboards, same token and cost handling — just
+> two valid `gen_ai.operation.name` values from the spec. Sentry's AI views key
+> off the `gen_ai.operation.type` attribute, so both shapes render identically.
 
 ---
 
-## 1. slack-agent-eve — DoorDash group-lunch bot on Eve
+## 1. slack-agent-eve — DoorDash ordering bot on Eve
 
 ### Purpose
 
-"Lunchbot": a DoorDash group-order link posted in Slack triggers the agent
-(no @mention needed), which resolves the shared group cart through the local
-`dd-cli`, proposes three in-budget options (protein-heavy / balanced / junk)
-with photos and tool-estimated calories, and adds each person's in-thread
-pick to the group cart — never checking out. It shows how to trace an agent
-whose loop you don't own: Eve runs the tool loop, picks when to call the
-model, and executes tools — the demo hooks Sentry into Eve's single
-instrumentation seam and gets the full agent tree without touching agent or
-tool code. It also demonstrates a tool that makes its own LLM call
-(`estimate_nutrition`), which lands as a nested `gen_ai` span inside the
-tool span.
+"Mealbot" does two jobs from Slack. Ask it for breakfast, lunch, or dinner
+and it finds nearby restaurants, builds three picks from one menu, prices the
+cart, and hands back a DoorDash checkout link. Post a group-order link and it
+resolves the shared cart instead, then adds your pick to it. **It never
+submits an order** — for a personal order the last step is the link, for a
+group order it is the cart.
+
+It shows how to trace an agent whose loop you don't own: Eve runs the tool
+loop, picks when to call the model, and executes tools — the demo hooks
+Sentry into Eve's single instrumentation seam and gets the full agent tree
+without touching agent or tool code. It also demonstrates a tool that makes
+its own LLM call (`estimate_nutrition`), which lands as a nested `gen_ai`
+span inside the tool span, and domain wide events (`meal.pick.added`) that
+carry the calories and protein of every pick.
 
 ### Architecture
 
@@ -52,41 +55,50 @@ system prompt, `agent/agent.ts` wires an OpenRouter provider instance as the
 model (bypassing the Vercel AI Gateway), and each file in `agent/tools/`
 becomes a tool named after the file. Tools shell out to `dd-cli`
 (`--json-output`, data under `structuredContent`) with a fixed sanitized
-`--intent`; the `add_to_group_cart` tool enforces the per-person budget
-(`LUNCH_BUDGET_USD`) in code by re-pricing picks from
-`restaurant-item-details` before mutating the cart.
+`--intent`; the `add_to_cart` tool enforces the budget (a group order's own
+per-person spend limit, else `MEAL_BUDGET_USD`) in code by re-pricing picks
+from `restaurant-item-details` before mutating the cart.
+
+`dd-cli` is a local binary that signs in through a browser and stores its
+token in the OS keychain — neither of which exists in a deployment. So
+`agent/lib/dd.ts` branches: locally it runs the installed binary, and when
+deployed it runs the CLI inside a **named Vercel Sandbox** authenticated by
+`DD_CLI_ACCESS_TOKEN` (minted with `dd-cli export-token`). One sandbox is
+shared across function invocations, so the install cost is paid once.
+`DD_CLI_SANDBOX` decides which path is used.
 
 ```mermaid
 flowchart LR
     subgraph channels["Channels"]
-        slack["Slack workspace<br/>group-order link / @mention / DM"]
+        slack["Slack workspace<br/>meal request / group-order link<br/>@mention / DM"]
         tui["eve dev TUI /<br/>npx eve invoke"]
     end
     subgraph eve["Eve runtime"]
         webhook["/eve/v1/slack webhook<br/>+ HTTP channel"]
         loop["Tool loop<br/>(AI SDK streamText per step)"]
-        t1["resolve_group_cart"]
+        t1["find_restaurants /<br/>resolve_group_cart"]
         t2["get_menu / get_item_details"]
         t3["estimate_nutrition"]
-        t4["add_to_group_cart<br/>(budget guard in code)"]
+        t4["add_to_cart<br/>(budget guard in code)"]
+        t5["preview_order /<br/>get_checkout_link"]
     end
-    dd["dd-cli (local binary,<br/>keychain auth)"]
+    dd["dd-cli<br/>local binary, or Vercel Sandbox<br/>when deployed"]
     dash["DoorDash"]
     or["OpenRouter<br/>anthropic/claude-sonnet-4.5<br/>+ claude-haiku-4.5 (nutrition)"]
-    inst["agent/instrumentation.ts<br/>Sentry.init + vercelAIIntegration"]
+    inst["agent/instrumentation.ts<br/>Sentry.init"]
     sentry["Sentry"]
 
     slack --> webhook
     tui --> webhook
     webhook --> loop
     loop --> or
-    loop --> t1 & t2 & t4
+    loop --> t1 & t2 & t4 & t5
     loop --> t3
     t3 --> or
-    t1 & t2 & t4 --> dd
+    t1 & t2 & t4 & t5 --> dd
     dd --> dash
-    loop -. "AI SDK telemetry (OTel)" .-> inst
-    inst -. "gen_ai.* spans" .-> sentry
+    loop -. "AI SDK telemetry via @ai-sdk/otel" .-> inst
+    inst -. "gen_ai.* spans + meal.* logs" .-> sentry
 ```
 
 The Sentry wiring (there is no official Eve integration; this composes both
@@ -94,12 +106,24 @@ sides' documented primitives):
 
 - `agent/instrumentation.ts` is Eve's auto-discovered hook. Its `setup`
   callback runs `Sentry.init` at server startup, which registers the global
-  OpenTelemetry tracer provider — the provider Eve's AI SDK telemetry
-  (`ai.eve.turn` → `ai.streamText` → `ai.toolCall`) flows into.
-- `vercelAIIntegration({ force: true, recordInputs: true, recordOutputs: true })`
-  keeps the span processors that rewrite those raw AI SDK spans into
-  `gen_ai.*` spans. `force` is required because Eve's nitro build bundles the
-  `ai` package, defeating Sentry's module detection.
+  OpenTelemetry tracer provider. Eve registers `@ai-sdk/otel` with the AI SDK,
+  so every model and tool call already arrives as a `gen_ai.*` span through
+  that provider — no Sentry AI integration is needed.
+- **Sentry's `VercelAI` integration is filtered out of the defaults.** `ai` 7
+  exposes the same telemetry twice: through the integration list on
+  `globalThis` (where Eve registers `@ai-sdk/otel`) and through the
+  `ai:telemetry` diagnostics channel (which `vercelAIIntegration` subscribes
+  to). Keeping both records every model and tool call twice and doubles the
+  token and cost sums.
+- Content capture is one switch: `dataCollection.genAI.inputs/outputs` on
+  `Sentry.init`, driven by the same env flags as Eve's own `recordInputs` /
+  `recordOutputs`.
+- The default segment trace lifecycle is deliberate. An earlier version needed
+  `traceLifecycle: "stream"` to work around
+  [vercel/eve#1854](https://github.com/vercel/eve/issues/1854), where a turn's
+  later steps parented to an already-ended span and were dropped. Eve 0.32
+  fixed that, and streaming had to go: it buffers spans, and a Vercel function
+  freezes as soon as it responds, so a deployment reported no AI spans at all.
 - `traceChannelRequests: true` wraps inbound channel HTTP requests in a SERVER
   span, so traces start at the webhook, not at the first model call.
 - The `step.started` event hook runs on the same execution path as each model
@@ -120,30 +144,51 @@ A group-order link posted in Slack, through to the three options:
 | --- | --- | --- |
 | Slack POSTs the event to the webhook | `POST /eve/v1/slack` — `http.server` | Eve's `traceChannelRequests` (OTel SERVER span) |
 | Eve starts a turn | `ai.eve.turn` (keeps its raw name; carries `eve.session.id`, `eve.turn.id`) | Eve's own tracer (`trace.getTracer("eve")`) |
-| Step 1: Eve calls `streamText` | `invoke_agent doordash-lunch-agent` — `gen_ai.invoke_agent` | Eve emits `ai.streamText`; Sentry's `vercelAIIntegration` rewrites it |
-| The model decides to resolve the link | `generate_content anthropic/claude-sonnet-4.5` — `gen_ai.generate_content` | Eve emits `ai.streamText.doStream`; integration rewrites it |
-| Eve executes `resolve_group_cart` (shells to `dd-cli cart list/show`) | `execute_tool resolve_group_cart` — `gen_ai.execute_tool` | Eve emits `ai.toolCall`; integration rewrites it |
-| Later step: `estimate_nutrition` calls `generateObject` itself | `execute_tool estimate_nutrition` with a **nested** `generate_content anthropic/claude-haiku-4.5` child | Eve's `registerTelemetry` covers every AI SDK call in the process, including ones made inside tools |
+| Each step: Eve calls `streamText` | `invoke_agent <model>` and `chat <model>`, carrying `gen_ai.operation.type` of `agent` / `ai_client` | `@ai-sdk/otel`, which Eve registers with the AI SDK |
+| Eve executes a tool (shells to `dd-cli`) | `execute_tool <tool>` with `gen_ai.tool.*` attributes | Same adapter, from the AI SDK's tool events |
+| `estimate_nutrition` calls `generateObject` itself | `execute_tool estimate_nutrition` with a **nested** `chat anthropic/claude-haiku-4.5` child | The adapter covers every AI SDK call in the process, including ones made inside tools |
 
 ```text
-POST /eve/v1/slack                          http.server — inbound Slack webhook
-└─ ai.eve.turn                              eve's per-turn container
-   ├─ invoke_agent doordash-lunch-agent     gen_ai.invoke_agent — step 1
-   │  ├─ generate_content anthropic/claude-sonnet-4.5   gen_ai.generate_content
-   │  └─ execute_tool resolve_group_cart    gen_ai.execute_tool
-   ├─ invoke_agent doordash-lunch-agent     step 2 — execute_tool get_menu
-   ├─ invoke_agent doordash-lunch-agent     step 3
-   │  └─ execute_tool estimate_nutrition    gen_ai.execute_tool
-   │     └─ generate_content anthropic/claude-haiku-4.5   nested tool-internal LLM call
-   └─ invoke_agent doordash-lunch-agent     final step
-      └─ generate_content anthropic/claude-sonnet-4.5   writes the Slack reply
+POST /eve/v1/slack                             http.server — inbound Slack webhook
+└─ ai.eve.turn                                 eve's per-turn container
+   ├─ invoke_agent anthropic/claude-sonnet-4.5 step 1
+   │  ├─ chat anthropic/claude-sonnet-4.5
+   │  └─ execute_tool find_restaurants
+   ├─ invoke_agent anthropic/claude-sonnet-4.5 step 2 — execute_tool get_menu
+   ├─ invoke_agent anthropic/claude-sonnet-4.5 step 3
+   │  └─ execute_tool estimate_nutrition
+   │     └─ chat anthropic/claude-haiku-4.5    nested tool-internal LLM call
+   └─ invoke_agent anthropic/claude-sonnet-4.5 final step
+      └─ chat anthropic/claude-sonnet-4.5      writes the Slack reply
 ```
+
+Sentry's AI views select on the `gen_ai.operation.type` attribute rather than
+on `span.op`, so the Agent Timeline and the AI Agents module read this tree
+directly.
 
 Local runs (`eve dev` / `eve invoke`) produce the identical tree under the
 HTTP channel's server span instead of the Slack webhook. Every AI span also
 carries the Slack context from the runtime hook (as
 `vercel.ai.settings.context.slack.channel_id` / `.slack.user_id`) and
 `gen_ai.conversation.id` = the Slack thread `ts`.
+
+### Spans vs logs
+
+The split is deliberate. Spans are the **system** record and are entirely
+auto-instrumented — tool arguments, models, tokens, latency. Logs are the
+**domain** record, written by hand where the business event happens, and
+nothing is mirrored across both:
+
+| Event | Written by | Carries |
+| --- | --- | --- |
+| `meal.restaurant.presented` | `present_restaurant_options` | store, index, craving |
+| `meal.option.presented` | `present_meal_options` | lane, item, price, calories, protein |
+| `meal.pick.added` | `add_to_cart` | item, quantity, price, budget, calories, protein |
+| `meal.checkout.offered` | `get_checkout_link` | store, total, currency |
+
+The numeric attributes are typed, so Explore, dashboards, and metric alerts
+can sum them — `sum(tags[meal.calories,number])` grouped by `user.id` is what
+drives the nutrition dashboard and the "protein under target" alert.
 
 ### Testing with Sentry
 
@@ -156,36 +201,44 @@ npm run dev             # eve dev TUI — chat with the full agent loop locally
 npx eve invoke "Options for this group order please: https://drd.sh/cart/XXXX/"
 ```
 
-Requires `dd-cli` installed and signed in on the same machine (keychain auth)
-and a group order hosted by — or joined from — that DoorDash account. A menu
-question ("what's on the menu at store 32384037?") exercises `get_menu` +
-`estimate_nutrition` without needing a group cart at all.
+Requires `dd-cli` installed and signed in on the same machine (`dd-cli login`,
+keychain auth). Asking for a meal ("find me sushi for dinner") exercises the
+whole personal flow; a group-order link hosted by — or joined from — that
+DoorDash account exercises the shared-cart flow.
 
-For the Slack surface: dd-cli's keychain pins the agent to this machine, so
-end-to-end Slack testing runs `eve dev` locally behind a tunnel (e.g.
-`cloudflared tunnel --url http://localhost:3000`) rather than a Vercel
-deployment. Create the Slack app from the demo's `slack-app-manifest.yaml`
-with `request_url` = `https://<tunnel-host>/eve/v1/slack`, install it, fill
-`SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET`, invite the bot to the lunch
-channel, and post a group-order link — the `message.channels` subscription
-plus the channel's `onMessage` link matcher trigger it without a mention.
+For the Slack surface, create the app from the demo's
+`slack-app-manifest.yaml`, install it, fill `SLACK_BOT_TOKEN` +
+`SLACK_SIGNING_SECRET`, and invite the bot to a channel. Posting a
+group-order link triggers it without a mention, via the `message.channels`
+subscription plus the channel's `onMessage` link matcher.
+
+Locally, point both `request_url` values at a tunnel (e.g.
+`cloudflared tunnel --url http://localhost:3000`). Deployed, point them at
+the Vercel production URL — a Slack app delivers to one URL at a time, so
+this is an either/or.
+
+To deploy: `npx eve deploy`, set the app's env vars in Vercel, and add
+`DD_CLI_ACCESS_TOKEN` from `dd-cli export-token` so the sandbox can
+authenticate. Two things to know — `eve deploy` overwrites `.env.local` with
+Vercel's environment, and Vercel Authentication must not cover production or
+Slack's webhooks get a 401.
 
 In Sentry:
 
-- **Insights → AI Agents** — the `doordash-lunch-agent` aggregates: runs, token
+- **Insights → AI Agents** — the `doordash-agent` aggregates: runs, token
   usage, model cost (OpenRouter slugs resolve in Sentry's pricing data), tool
   error rate.
 - **Explore → Traces** — one trace per turn with the tree above; prompts and
-  outputs are visible on spans because `recordInputs`/`recordOutputs` are on
-  (both on the integration and in Eve's instrumentation config).
+  outputs are visible on spans because content capture is on.
 - **Explore → Conversations** — each Slack thread groups into one
   conversation, with the Slack user id in the User column.
+- **Dashboards and alerts** — the `meal.*` logs drive a nutrition dashboard
+  (calories, protein, and spend per person) and two metric alerts on the logs
+  dataset: calories over a daily target, and protein under one.
 
-Two things only a live key can confirm (documented in the demo README): check
-the first real trace for doubled `ai.streamText` spans (Eve calls the AI SDK's
-`registerTelemetry`, which Sentry warns about combining with the integration —
-v10 source analysis says no duplication, but stay on `@sentry/node` 10.x), and
-that Conversations grouping renders from the hook-injected conversation id.
+If you see every model and tool call twice, Sentry's `VercelAI` integration
+has come back: it is a default integration, so it must be filtered out of the
+defaults by name, not merely left out of the `integrations` array.
 
 ---
 
