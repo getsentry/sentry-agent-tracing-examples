@@ -25,20 +25,46 @@ function envRate(name: string, fallback: number): number {
 const recordInputs = envFlag("SENTRY_RECORD_INPUTS", true);
 const recordOutputs = envFlag("SENTRY_RECORD_OUTPUTS", true);
 
-// Slack user id → profile for Sentry.setUser enrichment. The step hook is
-// synchronous, so users.info is fetched fire-and-forget: the very first step
-// a user triggers carries id-only context, everything after gets the real
-// name (and email, if the users:read.email scope is ever granted). A `null`
-// entry doubles as the in-flight marker and the failure cache — a missing
-// users:read scope fails once per user per process, not once per step.
+// Slack user id → profile for Sentry.setUser enrichment. A `null` entry is
+// the failure cache: a missing users:read scope fails once per user per
+// process, not once per step.
 const slackUserProfiles = new Map<
   string,
   { username?: string; email?: string } | null
 >();
 
-function resolveSlackProfile(userId: string): void {
+// Isolation scopes whose users.info call has not come back yet.
+const slackProfileWaiters = new Map<string, Set<Sentry.Scope>>();
+
+function applySlackUser(scope: Sentry.Scope, userId: string): void {
+  const profile = slackUserProfiles.get(userId);
+  scope.setUser({
+    id: userId,
+    // `username` is what the Logs pipeline emits as user.name and what the
+    // Conversations/Issues User column prefers over the raw id.
+    ...(profile?.username ? { username: profile.username } : {}),
+    ...(profile?.email ? { email: profile.email } : {}),
+  });
+}
+
+// The step hook is synchronous, so users.info cannot be awaited before the
+// turn's first spans open. It does not need to be: Sentry reads a span's
+// isolation scope when the span ends, so re-applying the profile on arrival
+// still puts the display name on spans that were already in flight. This
+// matters for the first turn a process handles — Explore > Conversations
+// takes its User column from the earliest span alone, so losing that one
+// span shows the whole conversation under a raw Slack id.
+function trackSlackProfile(userId: string, scope: Sentry.Scope): void {
+  applySlackUser(scope, userId);
   if (slackUserProfiles.has(userId)) return;
-  slackUserProfiles.set(userId, null);
+
+  const waiting = slackProfileWaiters.get(userId);
+  if (waiting) {
+    waiting.add(scope);
+    return;
+  }
+  slackProfileWaiters.set(userId, new Set([scope]));
+
   void callSlackApi({
     botToken: undefined, // falls back to env SLACK_BOT_TOKEN
     operation: "users.info",
@@ -61,7 +87,14 @@ function resolveSlackProfile(userId: string): void {
       });
     })
     .catch(() => {
-      // id-only user context still applies; the null marker stops retries
+      // id-only user context still applies
+    })
+    .finally(() => {
+      if (!slackUserProfiles.has(userId)) slackUserProfiles.set(userId, null);
+      for (const waiter of slackProfileWaiters.get(userId) ?? []) {
+        applySlackUser(waiter, userId);
+      }
+      slackProfileWaiters.delete(userId);
     });
 }
 
@@ -153,15 +186,7 @@ export default defineInstrumentation({
         userId: slack_.userId ?? null,
       };
       if (slack_.userId) {
-        resolveSlackProfile(slack_.userId);
-        const profile = slackUserProfiles.get(slack_.userId);
-        Sentry.setUser({
-          id: slack_.userId,
-          // `username` is what the Logs pipeline emits as user.name and what
-          // the Conversations/Issues User column prefers over the raw id.
-          ...(profile?.username ? { username: profile.username } : {}),
-          ...(profile?.email ? { email: profile.email } : {}),
-        });
+        trackSlackProfile(slack_.userId, Sentry.getIsolationScope());
       }
       return {
         runtimeContext: {
