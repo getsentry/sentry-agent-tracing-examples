@@ -25,4 +25,23 @@ export default slackChannel({
     const hasGroupOrderLink = CART_LINK_RE.test(message.text);
     return hasGroupOrderLink || (await ctx.isSubscribed()) ? { auth: null } : null;
   },
+  // "Pick N" buttons on the restaurant and meal cards. Slack POSTs
+  // block_actions to the same webhook route; eve forwards non-HITL actions
+  // here. ctx.send dispatches a user message into the thread's session, so a
+  // click becomes a normal turn the agent handles per the instructions.
+  async onInteraction(action, ctx) {
+    const isPick =
+      action.actionId.startsWith("pick_option_") || action.actionId.startsWith("pick_restaurant_");
+    if (!isPick) return;
+    const pick = action.value ?? action.label ?? "their option";
+    // Slack voids the click unless the block_actions POST is acked within 3
+    // seconds, and on eve's local queue ctx.send runs the triggered turn
+    // inline — so the send must not be awaited here.
+    void ctx
+      .send(
+        `<@${action.user.id}> clicked ${action.label ?? "a pick button"} on the options card — their pick is ${pick}.`,
+        { auth: null },
+      )
+      .catch((error) => console.error("[slack] pick dispatch failed", error));
+  },
 });

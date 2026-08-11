@@ -1,6 +1,8 @@
+import * as Sentry from "@sentry/node";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { lunchBudgetUsd, runDd, stripCatalogPrefix, toCartSummary } from "../lib/dd";
+import { conversationStash } from "../lib/conversation";
+import { mealBudgetUsd, runDd, showCart, stripCatalogPrefix, toCartSummary } from "../lib/dd";
 
 // Quantities avoid .int()/.min()/.max(): Zod 4 renders them as JSON-Schema
 // integer bounds, which Azure-hosted models behind OpenRouter reject.
@@ -48,21 +50,36 @@ function collectOptionPrices(extras: RawExtra[] | undefined, prices: Map<string,
 
 export default defineTool({
   description:
-    "Add one picked item (with any customization options) to the resolved group cart. Enforces the per-person lunch budget against DoorDash's own prices — an over-budget item is refused, not added. Returns the updated cart contents on success, or the required customization groups if DoorDash rejects the item for missing choices.",
+    "Add one picked item (with any customization options) to a cart. Pass cartUuid from resolve_group_cart to add to a shared group order; omit it for a personal order and a new cart is created at this store. Enforces the budget against DoorDash's own prices — an over-budget item is refused, not added. Returns the updated cart contents on success, or the required customization groups if DoorDash rejects the item for missing choices.",
   inputSchema: z.object({
-    cartUuid: z.string().min(1).describe("cartUuid from resolve_group_cart"),
+    cartUuid: z
+      .string()
+      .nullish()
+      .describe("cartUuid from resolve_group_cart for a group order; omit for a personal order"),
     storeId: z.string().min(1),
     menuId: z.string().min(1).describe("menuId from get_menu"),
     itemId: z.string().min(1).describe("itemId from get_menu"),
     itemName: z.string().min(1),
     quantity: z.number().default(1).describe("Whole number, 1 to 5"),
+    caloriesEstimate: z
+      .number()
+      .nullish()
+      .describe("Estimated calories for one of this item, copied exactly from estimate_nutrition; omit if unavailable"),
+    proteinGEstimate: z
+      .number()
+      .nullish()
+      .describe("Estimated protein grams for one of this item, copied exactly from estimate_nutrition; omit if unavailable"),
     nestedOptions: z
       .array(optionSchema)
       .optional()
       .describe("Selected customization options, from get_item_details"),
   }),
-  async execute({ cartUuid, storeId, menuId, itemId, itemName, quantity: rawQuantity, nestedOptions: rawNestedOptions }) {
-    const budgetUsd = lunchBudgetUsd();
+  async execute({ cartUuid, storeId, menuId, itemId, itemName, quantity: rawQuantity, caloriesEstimate, proteinGEstimate, nestedOptions: rawNestedOptions }) {
+    // A group order carries the host's own per-person limit; a personal order
+    // has none, so the configured budget applies.
+    const budgetUsd = cartUuid
+      ? ((await showCart(cartUuid)).spendLimitUsd ?? mealBudgetUsd())
+      : mealBudgetUsd();
     const bareItemId = stripCatalogPrefix(itemId);
     const quantity = normalizeQuantity(rawQuantity, 5);
     const nestedOptions = rawNestedOptions?.map((option) => ({
@@ -110,7 +127,7 @@ export default defineTool({
         overBudget: true,
         itemTotalUsd,
         budgetUsd,
-        reason: `"${itemName}" comes to $${itemTotalUsd.toFixed(2)} with the selected options, over the $${budgetUsd.toFixed(2)} per-person budget. Offer cheaper options instead.`,
+        reason: `"${itemName}" comes to $${itemTotalUsd.toFixed(2)} with the selected options, over the $${budgetUsd.toFixed(2)} budget. Offer cheaper options instead.`,
       };
     }
 
@@ -147,8 +164,9 @@ export default defineTool({
       storeId,
       "--menu-id",
       menuId,
-      "--cart-uuid",
-      cartUuid,
+      // Without --cart-uuid dd-cli appends to this store's open cart, or
+      // creates one — which is what a personal order wants.
+      ...(cartUuid ? ["--cart-uuid", cartUuid] : []),
       "--items-json",
       itemsJson,
     ]);
@@ -160,12 +178,32 @@ export default defineTool({
       return { added: false, itemErrors, message: result.message ?? null };
     }
 
+    // The domain event: WHO ate WHAT — item, price, and nutrition per pick.
+    // Opinionated split: spans stay the auto-instrumented system record;
+    // this log wide event is the business record, with numeric attributes
+    // so Explore/dashboards/alerts can sum calories and protein per user.
+    const conv = conversationStash();
+    Sentry.logger.info("meal.pick.added", {
+      "meal.item": itemName,
+      "meal.quantity": quantity,
+      "meal.price_usd": itemTotalUsd,
+      "meal.budget_usd": budgetUsd,
+      ...(caloriesEstimate != null
+        ? { "meal.calories": Math.round(caloriesEstimate * quantity) }
+        : {}),
+      ...(proteinGEstimate != null
+        ? { "meal.protein_g": Math.round(proteinGEstimate * quantity) }
+        : {}),
+      ...(conv?.threadTs ? { "conversation.id": conv.threadTs } : {}),
+      ...(conv?.userId ? { "user.id": conv.userId } : {}),
+    });
+
     return {
       added: true,
       itemTotalUsd,
       budgetUsd,
       cart: toCartSummary(
-        String(result.cart_uuid ?? cartUuid),
+        String(result.cart_uuid ?? cartUuid ?? ""),
         (result.cart ?? {}) as Parameters<typeof toCartSummary>[1],
       ),
     };

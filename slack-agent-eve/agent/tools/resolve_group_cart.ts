@@ -2,7 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import {
   cartLinkToken,
-  lunchBudgetUsd,
+  mealBudgetUsd,
   runDd,
   showCart,
   type CartSummary,
@@ -18,7 +18,7 @@ export default defineTool({
       .describe("The group-order share link as posted in Slack"),
   }),
   async execute({ groupOrderLink }) {
-    const budgetUsd = lunchBudgetUsd();
+    const fallbackBudgetUsd = mealBudgetUsd();
     const list = await runDd(["cart", "list"]);
     const carts = (list.carts ?? []) as { cart_uuid?: string }[];
 
@@ -42,7 +42,7 @@ export default defineTool({
     if (!matched) {
       return {
         found: false,
-        budgetUsd,
+        budgetUsd: fallbackBudgetUsd,
         openGroupCarts: groupCarts.map(({ cartUuid, storeName, itemsCount, groupCartUrl }) => ({
           cartUuid,
           storeName,
@@ -54,6 +54,14 @@ export default defineTool({
       };
     }
 
-    return { found: true, budgetUsd, cart: matched };
+    // The group order's own spend limit (set by the host in DoorDash) is the
+    // real budget; MEAL_BUDGET_USD only covers carts created without one.
+    return {
+      found: true,
+      budgetUsd: matched.spendLimitUsd ?? fallbackBudgetUsd,
+      budgetSource:
+        matched.spendLimitUsd != null ? "group-order spend limit" : "MEAL_BUDGET_USD fallback",
+      cart: matched,
+    };
   },
 });

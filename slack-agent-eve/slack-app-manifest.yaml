@@ -1,15 +1,14 @@
-# Slack app manifest for Lunchbot (create app "From a manifest" at api.slack.com/apps).
-# Slack accepts the manifest even with this placeholder request_url — verification is
-# deferred for manifest-created apps, but no events are delivered until it passes.
-# After install: run the agent + tunnel, then set the real URL under App Settings >
-# Event Subscriptions so Slack's url_verification challenge can succeed.
+# Slack app manifest for Mealbot (create app "From a manifest" at api.slack.com/apps).
+# request_url points at the Vercel production deployment. To develop locally,
+# swap both request_url values for the tunnel host instead — one Slack app can
+# only deliver to one URL at a time.
 display_information:
-  name: Lunchbot
-  description: "DoorDash group-lunch picker: post a group-order link, pick from 3 in-budget options"
+  name: Mealbot
+  description: "DoorDash ordering bot: ask for a meal or post a group-order link, pick from 3 in-budget options"
   background_color: "#eb1700"
 features:
   bot_user:
-    display_name: lunchbot
+    display_name: mealbot
     always_online: true
 oauth_config:
   scopes:
@@ -20,9 +19,13 @@ oauth_config:
       - im:write # eve delivers HITL/auth prompts via DM
       - channels:history # message.channels events — the post-a-link-no-mention trigger + thread context
       - groups:history # same, for private channels
+      - users:read # users.info — real display name on Sentry user context (add users:read.email too if email is wanted)
 settings:
+  interactivity: # "Pick N" buttons on the options card; payloads POST to the same eve route
+    is_enabled: true
+    request_url: https://mealbot.sentry.dev/eve/v1/slack
   event_subscriptions:
-    request_url: https://YOUR-PUBLIC-URL/eve/v1/slack
+    request_url: https://mealbot.sentry.dev/eve/v1/slack
     bot_events:
       - app_mention
       - message.im

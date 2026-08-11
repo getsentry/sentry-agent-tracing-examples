@@ -1,0 +1,113 @@
+import * as Sentry from "@sentry/node";
+import { callSlackApi } from "eve/channels/slack";
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+import { conversationStash } from "../lib/conversation";
+
+const choiceSchema = z.object({
+  storeId: z.string().min(1).describe("storeId from find_restaurants, copied exactly"),
+  name: z.string().min(1),
+  blurb: z.string().min(1).describe("One-sentence reason this fits what they asked for"),
+  detail: z
+    .string()
+    .nullish()
+    .describe('Distance, delivery time, rating — e.g. "0.2 mi · 20 min · 4.4★"'),
+  imageUrl: z.string().nullish().describe("imageUrl from find_restaurants; omit when it has none"),
+});
+
+type SlackBlock = Record<string, unknown>;
+
+const postedCards = new Map<string, string>();
+
+export default defineTool({
+  description:
+    "Post three restaurant choices into the Slack thread as a card with photo thumbnails and Pick buttons. Use this as the first step of a personal order, before any menu lookup. Copy channelId, threadTs, and triggerMessageTs from the <slack_message> envelope.",
+  inputSchema: z.object({
+    channelId: z.string().min(1).describe("channel_id from the <slack_message> envelope"),
+    threadTs: z.string().min(1).describe("thread_ts from the <slack_message> envelope"),
+    triggerMessageTs: z
+      .string()
+      .min(1)
+      .describe("message_ts from the <slack_message> envelope of the message that triggered this"),
+    craving: z.string().min(1).describe('What they asked for, echoed back — e.g. "sushi"'),
+    choices: z.array(choiceSchema).min(2).max(4),
+  }),
+  async execute({ channelId, threadTs, triggerMessageTs, craving, choices }) {
+    const dedupeKey = `${channelId}:${triggerMessageTs}`;
+    const alreadyPostedTs = postedCards.get(dedupeKey);
+    if (alreadyPostedTs) {
+      return {
+        posted: false,
+        messageTs: alreadyPostedTs,
+        note: "A restaurant card for this request is already in the thread — ask for their pick instead of posting another.",
+      };
+    }
+
+    const blocks: SlackBlock[] = [
+      {
+        type: "header",
+        text: { type: "plain_text", text: `Where to order — ${craving}`.slice(0, 150) },
+      },
+      {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: "Pick a spot and I'll build three options from its menu" }],
+      },
+      ...choices.map((choice, index) => {
+        const section: SlackBlock = {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*${index + 1}. ${choice.name}*\n${choice.detail ?? ""}\n${choice.blurb}`.slice(0, 3000),
+          },
+        };
+        if (choice.imageUrl && choice.imageUrl.length <= 3000) {
+          section.accessory = {
+            type: "image",
+            image_url: choice.imageUrl,
+            alt_text: choice.name.slice(0, 2000),
+          };
+        }
+        return section;
+      }),
+      {
+        type: "actions",
+        elements: choices.map((choice, index) => ({
+          type: "button",
+          action_id: `pick_restaurant_${index + 1}`,
+          value: `${choice.name} (storeId ${choice.storeId})`.slice(0, 2000),
+          text: { type: "plain_text", text: `Pick ${index + 1}` },
+        })),
+      },
+    ];
+
+    const response = await callSlackApi({
+      botToken: undefined,
+      operation: "chat.postMessage",
+      body: {
+        channel: channelId,
+        thread_ts: threadTs,
+        blocks,
+        text: `Where to order — ${craving}: ${choices.map((c, i) => `${i + 1}. ${c.name}`).join(" · ")}`,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`chat.postMessage failed: ${response.error ?? "unknown_error"}`);
+    }
+    const messageTs = (response.ts as string | undefined) ?? null;
+    postedCards.set(dedupeKey, messageTs ?? "posted");
+
+    const conv = conversationStash();
+    for (const [index, choice] of choices.entries()) {
+      Sentry.logger.info("meal.restaurant.presented", {
+        "meal.craving": craving,
+        "meal.option_index": index + 1,
+        "meal.store": choice.name,
+        "meal.store_id": choice.storeId,
+        "conversation.id": threadTs,
+        ...(conv?.userId ? { "user.id": conv.userId } : {}),
+      });
+    }
+
+    return { posted: true, messageTs };
+  },
+});
