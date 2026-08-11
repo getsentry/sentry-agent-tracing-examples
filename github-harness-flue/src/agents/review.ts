@@ -31,7 +31,7 @@ function StyleReviewer() {
 }
 
 export function ReviewLead() {
-	useModel('openrouter/moonshotai/kimi-k2.6', { thinkingLevel: 'low' });
+	useModel('openrouter/x-ai/grok-4.5', { thinkingLevel: 'low' });
 
 	const sentryOrg = process.env.SENTRY_ORG_SLUG;
 	const sentryAppProject = process.env.SENTRY_APP_PROJECT_SLUG;
