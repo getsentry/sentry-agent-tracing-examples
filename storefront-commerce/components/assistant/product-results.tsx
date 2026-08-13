@@ -37,7 +37,7 @@ export function ProductResults({
               alt={product.title}
               fill
               sizes="180px"
-              className="object-contain transition duration-300 ease-in-out group-hover:scale-105"
+              className="object-cover transition duration-300 ease-in-out group-hover:scale-105"
             />
           </div>
           <div className="border-t border-neutral-200 p-3 dark:border-neutral-800">
@@ -83,7 +83,7 @@ export function ProductResult({
           alt={product.title}
           fill
           sizes="96px"
-          className="rounded-md object-contain"
+          className="rounded-md object-cover"
         />
       </div>
       <div className="min-w-0">
