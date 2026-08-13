@@ -7,8 +7,9 @@ import {
   streamText,
   toUIMessageStream,
 } from "ai";
-import { tools, type AssistantUIMessage } from "lib/ai/tools";
-import { DEMO_USER } from "lib/demo-user";
+import { modelById } from "lib/ai/models";
+import { createTools, type AssistantUIMessage } from "lib/ai/tools";
+import { shopperById } from "lib/demo-user";
 
 export const maxDuration = 30;
 
@@ -33,25 +34,28 @@ export async function POST(req: Request) {
   const { id, messages }: { id?: string; messages: AssistantUIMessage[] } =
     await req.json();
 
-  // Attribute this turn to the demo customer and thread all turns of one
-  // chat session into a single Sentry Conversation. Must happen before the
-  // AI call so the gen_ai spans pick both up.
-  Sentry.setUser(DEMO_USER);
+  // The demo store has no sign-in, so the shopper and the model come off the
+  // request. Both resolve through an allow-list (lib/demo-user, lib/ai/models)
+  // and fall back to the defaults, so the headers only pick between fixtures.
+  const shopper = shopperById(req.headers.get("x-demo-shopper"));
+  const model = modelById(req.headers.get("x-demo-model"));
+
+  // Attribute this turn to the shopper and thread all turns of one chat
+  // session into a single Sentry Conversation. Must happen before the AI call
+  // so the gen_ai spans pick both up.
+  Sentry.setUser(shopper);
   if (id) Sentry.setConversationId(id);
 
   const result = streamText({
-    model: openrouter(process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini"),
+    model: openrouter(model),
     instructions,
     messages: await convertToModelMessages(messages),
-    tools,
+    tools: createTools(shopper.id),
     stopWhen: isStepCount(5),
-    // functionId names the agent in Sentry's AI Agents dashboard;
-    // recordInputs/recordOutputs make prompts and tool payloads visible.
-    experimental_telemetry: {
-      functionId: "shopping-assistant",
-      recordInputs: true,
-      recordOutputs: true,
-    },
+    // functionId names the agent in Sentry's AI Agents dashboard. The AI SDK
+    // records inputs and outputs by default; what Sentry keeps of them is set
+    // once by dataCollection.genAI in sentry.server.config.ts.
+    telemetry: { functionId: "shopping-assistant" },
   });
 
   return createUIMessageStreamResponse({

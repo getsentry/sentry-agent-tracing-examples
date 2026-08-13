@@ -15,8 +15,8 @@ Built on the [Next.js Commerce](https://github.com/vercel/commerce) template
   `use cache`). Its Shopify data layer is replaced by `lib/commerce`, which
   exposes the exact same functions and types, so every template component
   works unchanged.
-- **Fake database** — `lib/db` is an in-memory catalog (12 products, mock
-  customer, orders). Every accessor is async with jittered 20–120 ms latency
+- **Fake database** — `lib/db` is an in-memory catalog (12 products, six
+  customers, their orders). Every accessor is async with jittered 20–120 ms latency
   and wrapped in a Sentry `db.query` span with a parameterized SQL name
   (`SELECT * FROM products WHERE handle = ?`), so traces and Sentry's Queries
   insights look like a real database is behind the store.
@@ -29,6 +29,11 @@ Built on the [Next.js Commerce](https://github.com/vercel/commerce) template
   demo's planted bug: orders that predate the payments launch have no
   payment record, so refunding one crashes the tool mid-conversation
   (`TypeError` on the missing row) while newer orders refund fine.
+- **Shoppers** — the store has no sign-in, so `lib/demo-user` is the whole
+  cast: six fictional customers, each with their own orders and loyalty
+  status. The browser is always Ada; the traffic runner (below) picks any of
+  them per request, which is what gives the spend dashboards more than one
+  spender.
 - **Sentry** — `@sentry/nextjs` with `vercelAIIntegration` (inputs/outputs
   recording on) turns the AI SDK telemetry into `gen_ai.*` agent spans; the
   chat route also sets the Sentry user and conversation ID so multi-turn
@@ -73,10 +78,10 @@ Agents**, DB spans in **Insights → Queries**):
 ```
 POST /api/chat                                      http.server
 └── invoke_agent shopping-assistant                 gen_ai.invoke_agent
-    ├── chat openai/gpt-4o-mini                     gen_ai.chat
+    ├── chat anthropic/claude-sonnet-5              gen_ai.chat
     ├── execute_tool searchProducts                 gen_ai.execute_tool
     │   └── SELECT * FROM products WHERE …          db.query
-    ├── chat openai/gpt-4o-mini                     gen_ai.chat
+    ├── chat anthropic/claude-sonnet-5              gen_ai.chat
     └── …more tool/chat steps until the answer
 ```
 
@@ -85,9 +90,35 @@ POST /api/chat                                      http.server
 - **db.query spans** nest under the tool that triggered them, named as
   parameterized SQL so Queries insights aggregates them.
 - The **AI Agents dashboard** groups everything under the
-  `shopping-assistant` agent (via `experimental_telemetry.functionId`), and
-  each chat session appears as one conversation.
+  `shopping-assistant` agent (via `telemetry.functionId`), and each chat
+  session appears as one conversation.
 
 Storefront page loads produce ordinary Next.js traces whose `db.query` spans
 come from the same fake database — so the demo also shows classic tracing
 alongside agent tracing.
+
+## Filling the dashboards
+
+A demo dashboard with one user and one model reads as a bug. `scripts/traffic.ts`
+replays scripted conversations against a running store — real HTTP requests,
+so the traces are the same ones a browser session produces:
+
+```bash
+npm run dev
+npm run traffic -- --dry-run          # show the plan, send nothing
+npm run traffic                       # ~20 conversations across six shoppers
+npm run traffic -- --seed 42 --concurrency 4
+npm run traffic -- --base-url http://localhost:4930   # dev server on another port
+```
+
+`scripts/scenarios.ts` holds both halves: the conversation scripts (gift
+hunting, sizing, order status, refunds — including the one that trips the
+planted bug) and the cast, weighted so spend is lopsided. Grace runs long
+sessions on the priciest model and tops the spend table; Radia asks one-line
+questions on the cheapest. Models come from `lib/ai/models.ts`, all current
+OpenRouter ids, because Sentry derives `gen_ai.cost.*` from OpenRouter's
+pricing feed — an id that feed does not carry silently costs nothing.
+
+The runner picks the shopper and model with the `x-demo-shopper` and
+`x-demo-model` request headers. Both resolve through an allow-list and fall
+back to the defaults, so they only choose between fixtures.

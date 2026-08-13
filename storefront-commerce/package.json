@@ -5,23 +5,24 @@
   },
   "scripts": {
     "dev": "next dev --turbopack",
+    "traffic": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/traffic.ts",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
     "prettier": "prettier --write --ignore-unknown .",
     "prettier:check": "prettier --check --ignore-unknown ."
   },
   "dependencies": {
-    "@ai-sdk/react": "4.0.59",
+    "@ai-sdk/react": "4.0.64",
     "@headlessui/react": "^2.2.0",
     "@heroicons/react": "^2.2.0",
     "@openrouter/ai-sdk-provider": "3.0.0",
-    "@sentry/nextjs": "10.69.0",
+    "@sentry/nextjs": "10.70.0",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",
     "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
-    "ai": "7.0.56",
+    "ai": "7.0.61",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -43,13 +44,13 @@
     "@tailwindcss/container-queries": "^0.1.1",
     "@tailwindcss/postcss": "^4.0.14",
     "@tailwindcss/typography": "^0.5.16",
-    "@types/node": "22.13.10",
+    "@types/node": "22.20.1",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "postcss": "^8.5.3",
-    "prettier": "3.5.3",
-    "prettier-plugin-tailwindcss": "^0.6.11",
+    "prettier": "3.9.6",
+    "prettier-plugin-tailwindcss": "^0.8.1",
     "tailwindcss": "^4.0.14",
-    "typescript": "5.8.2"
+    "typescript": "7.0.2"
   }
 }

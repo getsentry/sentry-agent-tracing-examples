@@ -6,24 +6,31 @@ Sentry.init({
   // Sample every trace — this is a demo; dial down for real traffic.
   tracesSampleRate: 1.0,
   enableLogs: true,
-  // Every event from the demo belongs to the one signed-in customer, so
-  // page renders and server actions carry the user even where no request
-  // handler calls Sentry.setUser (the chat route still does, as the
-  // realistic per-request pattern).
-  initialScope: { user: DEMO_USER },
+  // Page renders and server actions never call Sentry.setUser, so they fall
+  // back to the signed-in shopper. A fallback and not `initialScope`, because
+  // initialScope lands on the scope a root span captures, which is merged
+  // after the isolation scope Sentry.setUser writes to — it would silently
+  // overwrite the per-request shopper the chat route resolved.
+  beforeSend(event) {
+    if (!event.user?.id) event.user = DEMO_USER;
+    return event;
+  },
+  beforeSendTransaction(event) {
+    if (!event.user?.id) event.user = DEMO_USER;
+    return event;
+  },
   // Note on stack-trace in-app frames: under `next dev` (Turbopack) the SDK
   // misclassifies frames and Sentry ingest overrides any client-side
   // correction, so the fix lives in the project's Stack Trace Rules
   // (Settings → Issue Grouping), not here. See
   // https://github.com/getsentry/sentry-javascript/issues/23176
+  // One switch for gen_ai content capture — prompts, outputs, and tool
+  // payloads. The integration reads this as its default, so no per-integration
+  // recordInputs/recordOutputs.
+  dataCollection: { genAI: { inputs: true, outputs: true } },
   integrations: [
     // Turns the AI SDK's telemetry into gen_ai.* agent spans. `force` keeps
-    // the semantic span names even when the build bundles the `ai` package;
-    // recordInputs/recordOutputs capture prompts, outputs, and tool payloads.
-    Sentry.vercelAIIntegration({
-      force: true,
-      recordInputs: true,
-      recordOutputs: true,
-    }),
+    // the semantic span names even when the build bundles the `ai` package.
+    Sentry.vercelAIIntegration({ force: true }),
   ],
 });

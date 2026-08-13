@@ -193,8 +193,7 @@ export function selectOrder(
   return query(
     "SELECT * FROM orders WHERE customer_id = ? AND id = ? LIMIT 1",
     "SELECT",
-    () =>
-      ORDERS.find((o) => o.customerId === customerId && o.id === orderId),
+    () => ORDERS.find((o) => o.customerId === customerId && o.id === orderId),
   );
 }
 
