@@ -99,6 +99,9 @@ function trackSlackProfile(userId: string, scope: Sentry.Scope): void {
 }
 
 export default defineInstrumentation({
+  // Names the agent in Sentry's AI views. Without it eve falls back to the
+  // runtime agent name, which is the package name (doordash-agent).
+  functionId: "mealbot",
   // Runs at server startup, before any agent code. Sentry.init registers a
   // global OpenTelemetry tracer provider, so eve's AI SDK telemetry spans
   // (ai.eve.turn > ai.streamText > ai.toolCall) flow straight into Sentry.
@@ -136,10 +139,20 @@ export default defineInstrumentation({
       // tokens, models) already lives on the auto-instrumented spans; logs
       // add the business layer spans can't carry.
       enableLogs: envFlag("SENTRY_ENABLE_LOGS", true),
-      integrations: (defaults) => [
-        // Dropped as a duplicate: eve registers @ai-sdk/otel with the AI SDK,
-        // so these same calls already arrive as spans.
-        ...defaults.filter((integration) => integration.name !== "VercelAI"),
+      integrations: [
+        // Required for the AI Agents views: without it every model and tool
+        // span still arrives, but as op:default instead of gen_ai.*, so it is
+        // invisible to Sentry's AI product, the spend dashboard, and the
+        // detectors (verified live 2026-08-11 17:32 to 2026-08-12 23:34).
+        //
+        // It also emits its own spans off the `ai:telemetry` diagnostics
+        // channel, so each model call is described twice in the waterfall:
+        // once here (origin auto.vercelai.channel) and once by eve's
+        // @ai-sdk/otel span (origin manual, left at op:default). Spend is
+        // still counted once, because every gen_ai query matches only the
+        // first. force: true because eve's nitro build bundles `ai`, which
+        // defeats Sentry's module detection.
+        Sentry.vercelAIIntegration({ force: true }),
       ],
     });
   },
