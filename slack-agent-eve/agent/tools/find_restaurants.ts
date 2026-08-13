@@ -1,6 +1,11 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { defaultDeliveryPoint, searchRestaurants } from "../lib/dd";
+import { defaultDeliveryPoint, searchRestaurants, storeIsOpen } from "../lib/dd";
+import type { Restaurant } from "../lib/dd";
+
+// Long enough for a healthy probe round, short enough that a stalled one
+// never holds up a reply in Slack.
+const PROBE_BUDGET_MS = 6_000;
 
 export default defineTool({
   description:
@@ -14,14 +19,35 @@ export default defineTool({
   }),
   async execute({ query, limit }) {
     const wanted = Math.min(10, Math.max(3, Math.round(limit ?? 8)));
-    const [restaurants, point] = await Promise.all([
-      searchRestaurants(query, wanted),
+    // Over-fetch: closed stores are dropped below, so the search needs slack.
+    const [candidates, point] = await Promise.all([
+      searchRestaurants(query, Math.min(12, wanted + 4)),
       defaultDeliveryPoint(),
     ]);
+
+    // Search cannot tell open from closed — only the menu endpoint reports
+    // store_is_open — so each candidate costs a probe. The probes are capped
+    // and time-boxed, and a store is dropped only when it is *known* closed:
+    // an unfinished or failed probe leaves the store in, so a slow API costs
+    // seconds rather than an empty answer.
+    const probed: Restaurant[] = candidates.slice(0, 6);
+    const open = await Promise.all(
+      probed.map((store) =>
+        Promise.race([
+          storeIsOpen(store.storeId),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), PROBE_BUDGET_MS)),
+        ]),
+      ),
+    );
+    const restaurants = probed.filter((_, index) => open[index] !== false).slice(0, wanted);
+
     if (restaurants.length === 0) {
       return {
         found: false,
-        reason: `No orderable restaurants matched "${query}" near the saved address. Try a broader term.`,
+        reason:
+          candidates.length === 0
+            ? `No restaurants matched "${query}" near the saved address. Try a broader term.`
+            : `Everything matching "${query}" near the saved address is closed right now. Try a different craving or a later time.`,
       };
     }
     return { found: true, deliveringTo: point.printable, restaurants };

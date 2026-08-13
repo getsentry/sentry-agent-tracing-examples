@@ -268,3 +268,18 @@ export async function searchRestaurants(query: string, limit = 8): Promise<Resta
       reviewCount: typeof store.review_count === "number" ? store.review_count : null,
     }));
 }
+
+/**
+ * Search results carry no availability at all — a closed store is
+ * indistinguishable from an open one until the menu is fetched, and only the
+ * menu payload reports `store_is_open`. Returns null when the probe fails, so
+ * callers can decide whether unknown counts as offerable.
+ */
+export async function storeIsOpen(storeId: string): Promise<boolean | null> {
+  try {
+    const menu = await runDd(["menu", "--store-id", storeId]);
+    return typeof menu.store_is_open === "boolean" ? menu.store_is_open : null;
+  } catch {
+    return null;
+  }
+}
