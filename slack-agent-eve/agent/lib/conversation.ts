@@ -1,20 +1,26 @@
 /**
  * Cross-context handoff for conversation identity. instrumentation.ts (real
  * server context) writes the current Slack thread here at step.started; tool
- * code (which may run inside eve's workflow replay context, a different
- * module instance in the same process) reads it back. Symbol.for + globalThis
- * survive the module duplication. Single-process demo server: a TUI turn
- * right after a Slack turn inherits the stale thread — acceptable here.
+ * code and beforeSendSpan (which may run inside eve's workflow replay context,
+ * a different module instance in the same process) read it back. A global
+ * survives that module duplication where a module-level variable would not.
+ * Single-process demo server: a TUI turn right after a Slack turn inherits the
+ * stale thread — acceptable here.
  */
-export const CONVERSATION_STASH = Symbol.for("doordash-agent.conversation");
 
 export interface ConversationStash {
   threadTs?: string | null;
   userId?: string | null;
 }
 
+declare global {
+  var doordashAgentConversation: ConversationStash | undefined;
+}
+
 export function conversationStash(): ConversationStash | undefined {
-  return (globalThis as Record<symbol, unknown>)[CONVERSATION_STASH] as
-    | ConversationStash
-    | undefined;
+  return globalThis.doordashAgentConversation;
+}
+
+export function setConversationStash(stash: ConversationStash): void {
+  globalThis.doordashAgentConversation = stash;
 }

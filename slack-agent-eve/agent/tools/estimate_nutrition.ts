@@ -40,11 +40,14 @@ export default defineTool({
       .max(10),
   }),
   async execute({ items }) {
-    // A separate cheap model call: it shows up in the trace as its own
-    // gen_ai.generate_content span nested inside this tool's execute_tool span
-    // (eve's registerTelemetry covers every AI SDK call in the process).
+    // A separate cheap model call, nested inside this tool's execute_tool
+    // span. eve's registerTelemetry means every AI SDK call in the process is
+    // covered; Sentry's vercelAIIntegration is what gives the span its
+    // gen_ai.generate_content op. functionId keeps it apart from the main
+    // loop's calls in aggregate views, which otherwise show one blended model.
     const { object } = await generateObject({
-      model: openrouter.chat(process.env.NUTRITION_MODEL ?? "anthropic/claude-haiku-4.5"),
+      model: openrouter.chat(process.env.NUTRITION_MODEL ?? "openai/gpt-5.6-luna"),
+      telemetry: { functionId: "nutrition-estimator" },
       schema: estimatesSchema,
       prompt: [
         "Estimate the nutrition of each restaurant menu item below as typically served (one serving, as delivered).",

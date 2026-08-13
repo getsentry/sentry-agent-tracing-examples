@@ -2,9 +2,20 @@
 export const SITE_NAME = process.env.SITE_NAME ?? "Acme Store";
 export const COMPANY_NAME = process.env.COMPANY_NAME ?? "Acme, Inc.";
 
+// The `?sort=` values the search pages accept. Named here so the URL parser
+// in lib/search-params and this table cannot drift apart.
+export const SORT_SLUGS = [
+  "trending-desc",
+  "latest-desc",
+  "price-asc",
+  "price-desc",
+] as const;
+
+export type SortSlug = (typeof SORT_SLUGS)[number];
+
 export type SortFilterItem = {
   title: string;
-  slug: string | null;
+  slug: SortSlug | null;
   sortKey: "RELEVANCE" | "BEST_SELLING" | "CREATED_AT" | "PRICE";
   reverse: boolean;
 };
@@ -23,7 +34,7 @@ export const sorting: SortFilterItem[] = [
     slug: "trending-desc",
     sortKey: "BEST_SELLING",
     reverse: false,
-  }, // asc
+  },
   {
     title: "Latest arrivals",
     slug: "latest-desc",
@@ -35,7 +46,7 @@ export const sorting: SortFilterItem[] = [
     slug: "price-asc",
     sortKey: "PRICE",
     reverse: false,
-  }, // asc
+  },
   {
     title: "Price: High to low",
     slug: "price-desc",

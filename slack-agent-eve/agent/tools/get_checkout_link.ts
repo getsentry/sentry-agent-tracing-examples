@@ -2,7 +2,17 @@ import * as Sentry from "@sentry/node";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { conversationStash } from "../lib/conversation";
-import { runDd } from "../lib/dd";
+import { ddCheckoutUrl } from "../lib/dd";
+
+// Alias, not interface: only aliases get the implicit index signature that
+// Sentry.logger's Record<string, unknown> attribute bag requires.
+type CheckoutOfferedLog = {
+  "meal.store": string;
+  "meal.total"?: number;
+  "meal.currency"?: string;
+  "gen_ai.conversation.id"?: string;
+  "user.id"?: string;
+};
 
 export default defineTool({
   description:
@@ -14,8 +24,7 @@ export default defineTool({
     currency: z.string().nullish().describe("currency from preview_order, e.g. CAD"),
   }),
   async execute({ cartUuid, storeName, total, currency }) {
-    const result = await runDd(["order", "checkout-url", "--cart-uuid", cartUuid]);
-    const url = (result.checkout_url ?? result.url) as string | undefined;
+    const url = await ddCheckoutUrl(cartUuid);
     if (!url) {
       return {
         ready: false,
@@ -24,13 +33,12 @@ export default defineTool({
     }
 
     const conv = conversationStash();
-    Sentry.logger.info("meal.checkout.offered", {
-      "meal.store": storeName,
-      ...(total != null ? { "meal.total": total } : {}),
-      ...(currency ? { "meal.currency": currency } : {}),
-      ...(conv?.threadTs ? { "conversation.id": conv.threadTs } : {}),
-      ...(conv?.userId ? { "user.id": conv.userId } : {}),
-    });
+    const attributes: CheckoutOfferedLog = { "meal.store": storeName };
+    if (total != null) attributes["meal.total"] = total;
+    if (currency) attributes["meal.currency"] = currency;
+    if (conv?.threadTs) attributes["gen_ai.conversation.id"] = conv.threadTs;
+    if (conv?.userId) attributes["user.id"] = conv.userId;
+    Sentry.logger.info("meal.checkout.offered", attributes);
 
     return { ready: true, checkoutUrl: url };
   },

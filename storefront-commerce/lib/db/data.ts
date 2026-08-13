@@ -1,6 +1,7 @@
 import type {
   Collection,
   Customer,
+  Menu,
   Order,
   OrderLine,
   Page,
@@ -264,7 +265,10 @@ export const COLLECTIONS: Collection[] = [
   ),
 ];
 
-export const MENUS: Record<string, { title: string; path: string }[]> = {
+export type MenuHandle =
+  "next-js-frontend-header-menu" | "next-js-frontend-footer-menu";
+
+export const MENUS = {
   "next-js-frontend-header-menu": [
     { title: "All", path: "/search" },
     { title: "Apparel", path: "/search/apparel" },
@@ -277,7 +281,7 @@ export const MENUS: Record<string, { title: string; path: string }[]> = {
     { title: "FAQ", path: "/faq" },
     { title: "Shipping & Returns", path: "/shipping-returns" },
   ],
-};
+} satisfies Record<MenuHandle, Menu[]>;
 
 function page(
   handle: string,
@@ -521,8 +525,8 @@ export const ORDERS: Order[] = [
 
 // Payment records exist only for orders placed after the payments system
 // launched in June 2026 — the backfill for older orders never ran. That gap is
-// the demo's planted bug: refunding any pre-June order crashes the assistant's
-// refundOrder tool on the missing row, whichever shopper asks.
+// the demo's planted bug: with no row to charge against, the assistant's
+// refundOrder tool fails on any pre-June order, whichever shopper asks.
 export const PAYMENTS: Payment[] = [
   {
     orderId: "1042",

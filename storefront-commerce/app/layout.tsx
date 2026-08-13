@@ -27,7 +27,8 @@ export default async function RootLayout({
 }: {
   children: ReactNode;
 }) {
-  // Don't await the fetch, pass the Promise to the context provider
+  // Left unawaited so the layout shell renders before the cart resolves;
+  // CartProvider unwraps the promise with `use` inside a client boundary.
   const cart = getCart();
 
   return (

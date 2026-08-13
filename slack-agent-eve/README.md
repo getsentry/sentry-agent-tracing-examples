@@ -16,7 +16,7 @@ which the host checks out.
 1. Someone asks for food ("find me sushi for dinner"). `find_restaurants`
    searches near the DoorDash account's default delivery address — `search`
    ignores the saved address, so the coordinates come from `address list`.
-2. `present_restaurant_options` posts three choices in-thread as a Block Kit
+2. `present_restaurant_options` posts the choices in-thread as a Block Kit
    card with photos and Pick buttons.
 3. On a pick, the flow continues through **Choosing a meal** below.
 4. `add_to_cart` runs without a `cartUuid`, which creates a personal cart at
@@ -66,50 +66,68 @@ sanitized `--intent` string — Slack message text never goes into it.
 
 ```
 agent/
-├── agent.ts                 model: OpenRouter anthropic/claude-sonnet-4.5
+├── agent.ts                 model: OpenRouter anthropic/claude-sonnet-5
 ├── instructions.md          system prompt (Mealbot persona + both flows)
 ├── instrumentation.ts       Sentry.init + conversation id, user, Slack context per step
 ├── lib/dd.ts                dd-cli runner (local or Vercel Sandbox), search, budget, cart mapping
 ├── lib/conversation.ts      cross-context stash for the Slack thread id
+├── lib/slack-blocks.ts      the Block Kit shapes the cards post, and chat.postMessage
+├── lib/agent-name.ts        one agent name for the live agent and the seeder
 ├── channels/
 │   ├── slack.ts             Slack channel; dispatches on group-cart links without a mention
 │   └── eve.ts               HTTP channel auth (dev TUI / eve invoke)
 └── tools/
     ├── find_restaurants.ts        nearby stores near the default address (search)
-    ├── present_restaurant_options.ts  Block Kit card of three stores + Pick buttons
+    ├── present_restaurant_options.ts  Block Kit card of the stores + Pick buttons
     ├── resolve_group_cart.ts      link → cart UUID + store + budget (cart list/show)
     ├── get_menu.ts                menu with prices + photos (menu --store-id)
     ├── get_item_details.ts        modifiers with per-option prices (restaurant-item-details)
     ├── estimate_nutrition.ts      nested OpenRouter generateObject call → calories/macros
-    ├── present_meal_options.ts    Block Kit card (photos!) via eve's Card + callSlackApi
+    ├── present_meal_options.ts    Block Kit card (photos!) via chat.postMessage
     ├── add_to_cart.ts             code-enforced budget guard → cart add-items
     ├── preview_order.ts           read-only pricing (order preview)
     └── get_checkout_link.ts       the URL the person checks out with (order checkout-url)
 ```
 
-`agent/instrumentation.ts` runs at server startup; its `Sentry.init`
-registers the global OpenTelemetry tracer provider. Eve registers
-`@ai-sdk/otel` with the AI SDK, so model and tool calls arrive as `gen_ai.*`
-spans through that provider — no Sentry AI integration is involved. There is
-no official Eve + Sentry integration; this composes both sides' documented
-primitives.
+### How the AI spans reach Sentry
 
-Two non-obvious choices live in that file, both of which cost real telemetry
-when they are wrong:
+`agent/instrumentation.ts` runs at server startup, and its `Sentry.init`
+registers the global OpenTelemetry tracer provider. There is no official
+Eve + Sentry integration; this composes both sides' documented primitives, and
+two independent paths end up describing the same calls:
 
-- **Sentry's `VercelAI` integration is filtered out of the defaults.** `ai` 7
-  exposes the same telemetry through both the integration list on `globalThis`
-  (where Eve registers `@ai-sdk/otel`) and the `ai:telemetry` diagnostics
-  channel (which that integration subscribes to). Keeping both records every
-  call twice and doubles token and cost sums. It is a *default* integration,
-  so leaving it out of the `integrations` array does nothing — it has to be
-  filtered by name.
-- **The default segment trace lifecycle.** An earlier version used
-  `traceLifecycle: "stream"` to work around
-  [vercel/eve#1854](https://github.com/vercel/eve/issues/1854); Eve 0.32 fixed
-  that, and streaming had to go, because it buffers spans and a Vercel
-  function freezes as soon as it responds — a deployment reported no AI spans
-  at all.
+- Eve calls `registerTelemetry` with `@ai-sdk/otel`, so the AI SDK emits an
+  OTel span per model call and tool call (`ai.eve.turn`, `ai.streamText`,
+  `ai.toolCall`) through that provider.
+- `ai` 7 also publishes the same telemetry to Node's `ai:telemetry`
+  diagnostics channel. Sentry's `VercelAI` integration — on by default, and
+  listed in `integrations` anyway so the AI wiring is readable in one place —
+  subscribes to that channel and opens its own `gen_ai.*` spans. It also
+  installs the span processors that map the OTel spans above onto matching
+  `gen_ai.*` ops.
+
+That mapping is what the AI product runs on: without it those spans still
+arrive, but as `op:default`, invisible to Insights > AI Agents, to spend
+queries, and to the AI detectors. Left alone, the processors attach only once
+Sentry's `Modules` integration has found `ai` among the dependencies of the
+`package.json` in the process's working directory — which a built server need
+not be started from. `instrumentation.ts` passes
+`Sentry.vercelAIIntegration({ force: true })` instead, which attaches them
+unconditionally. (The other trigger — patching the `ai` module itself —
+supports `ai` below 7 only, so it never fires here.)
+
+The cost of running both paths is duplication: each model call and tool call
+gets two spans, one from each. They are told apart by span origin —
+`auto.vercelai.channel` for the diagnostics-channel copy,
+`auto.vercelai.otel` for eve's. Both copies carry the same
+`gen_ai.usage.*` token attributes, so a hand-written sum over every `gen_ai`
+span in a trace doubles the token count; filter by origin when you query
+spend directly.
+
+The second non-obvious choice in that file is the **default segment trace
+lifecycle**: spans are exported while the request is still open. Streaming
+export (`traceLifecycle: "stream"`) buffers them instead, and a Vercel function
+freezes the moment it responds, which loses whatever is still buffered.
 
 ## Running it deployed
 
@@ -129,8 +147,8 @@ Note that the exported token expires after a few days.
   need the binary — see "Running it deployed" above.
 - The DoorDash account signed into dd-cli must **host the group order or join
   it in the DoorDash app**. Share links are opaque short tokens
-  (`drd.sh/cart/<token>` → `doordash.com/dd/cart/<token>`, verified — no cart
-  UUID in the URL), so a link only resolves if the cart is on the account.
+  (`drd.sh/cart/<token>` → `doordash.com/dd/cart/<token>` — no cart UUID in
+  the URL), so a link only resolves if the cart is on the account.
   Unresolvable links degrade to recommend-only: the bot still proposes
   options, people add their own picks via the link.
 
@@ -143,12 +161,17 @@ Note that the exported token expires after a few days.
    - `SLACK_BOT_TOKEN` / `SLACK_SIGNING_SECRET` — only for the Slack surface
    - `MEAL_BUDGET_USD` — budget the add tool enforces (default 25); a group order's own spend limit wins
 
+   `eve dev` reads `.env.development.local`, `.env.local`, `.env.development`
+   and `.env`, in that order of precedence; `npm run seed` reads `.env` and
+   `.env.local`. One `.env` covers everything.
+
 ## Run
 
 ```bash
 npm run dev          # eve dev — local server + TUI; exercises the full loop incl. dd-cli
 npx eve invoke "Options for this group order please: https://drd.sh/cart/XXXX/"
 npm run typecheck    # tsc --noEmit
+npm run lint         # oxlint
 ```
 
 In the TUI, paste a group-order link the signed-in account hosts. The bot
@@ -158,48 +181,92 @@ should resolve the cart, fetch the menu, and propose three options.
 
 Slack needs a public webhook URL, but dd-cli only runs where its keychain
 credentials live — so for end-to-end testing run the agent locally and expose
-it through a tunnel (the undocumented-but-plausible path; Eve's docs only
-cover deployed webhooks):
+it through a tunnel (Eve's own docs only cover deployed webhooks):
 
 1. Create the Slack app from
    [`slack-app-manifest.yaml`](slack-app-manifest.yaml) ("From a manifest" at
-   api.slack.com/apps) and install it. The placeholder request URL is fine at
-   this point — manifest creation defers URL verification — but Slack delivers
-   no events until step 3 passes.
+   api.slack.com/apps) and install it. The request URL it carries points at
+   the production deployment; leaving it there is fine for now, because
+   manifest creation defers URL verification — but Slack delivers nothing to
+   your machine until step 3 passes.
 2. Put `SLACK_BOT_TOKEN` (xoxb-…) and `SLACK_SIGNING_SECRET` (Basic
    Information > App Credentials — not the xapp- app token) in `.env`, then
    start the agent (`npm run dev`) and a tunnel to its port, e.g.
    `cloudflared tunnel --url http://localhost:3000`.
-3. In App Settings > Event Subscriptions, set the request URL to
-   `https://<tunnel-host>/eve/v1/slack`. Slack sends its `url_verification`
-   challenge on save, so the agent and tunnel must be running.
+3. In App Settings, set both request URLs to
+   `https://<tunnel-host>/eve/v1/slack` — Event Subscriptions (Slack sends its
+   `url_verification` challenge on save, so the agent and tunnel must be
+   running) and Interactivity & Shortcuts, which carries the Pick buttons.
 4. Invite the bot to a channel. Post a group-order link — the
    manifest subscribes `message.channels`, so the link alone triggers it;
    @mentions and DMs also work.
+
+## Seeded demo data
+
+`seeder/` sends backdated fixture telemetry, so the spend dashboard has a few
+days of shape before anyone has used the bot. It builds `gen_ai` spans by hand —
+no model is called and nothing is charged — under the same agent name as the
+live agent, so seeded and live spend aggregate together. Only token counts and
+the OpenRouter model id are sent; Sentry prices them server-side.
+
+```bash
+npm run seed                        # small burst over the last three hours
+npm run seed -- --days 4 --spike    # four days of history + one retry-storm conversation
+npm run seed -- --days 4 --dry-run  # print the projected spend table, send nothing
+```
+
+`--days` is capped at 4 because Relay drops transactions older than five days.
+`--spike` adds the runaway turn the anomaly alert fires on. Also `--seed <n>`
+to replay a specific plan, `--only-days-back <a>-<b>` to re-send part of a
+rate-limited run, and `--environment <name>` (default `development`). Every
+seeded span carries `demo.seed_run:<run id>`, so a bad batch stays findable in
+Explore.
 
 ## What you'll see in Sentry
 
 One trace per agent turn under **Explore > Traces**, agent aggregates under
 **Insights > AI Agents**, and each Slack thread grouped in
 **Explore > Conversations** (`instrumentation.ts` sets the thread `ts` as
-`gen_ai.conversation.id` and the Slack user id as the user). The interesting
-new span shape is `estimate_nutrition`: its `execute_tool` span contains a
-nested `gen_ai.generate_content` child — the tool's own OpenRouter
-`generateObject` call — because Eve's `registerTelemetry` covers every AI SDK
-call in the process:
+`gen_ai.conversation.id` and the Slack user id as the user). The span names of
+one turn:
 
 ```
-POST /eve/v1/slack                          http.server — inbound Slack webhook
-└─ ai.eve.turn
-   ├─ invoke_agent anthropic/claude-sonnet-4.5   step 1
-   │  ├─ chat anthropic/claude-sonnet-4.5        model decides which tool to call
-   │  └─ execute_tool find_restaurants           shells to dd-cli
-   ├─ invoke_agent anthropic/claude-sonnet-4.5   step 2 — get_menu
-   ├─ invoke_agent anthropic/claude-sonnet-4.5   step 3
-   │  └─ execute_tool estimate_nutrition
-   │     └─ chat anthropic/claude-haiku-4.5      nested tool-internal LLM call
-   └─ invoke_agent anthropic/claude-sonnet-4.5   final step — writes the Slack reply
+POST /eve/v1/slack                       http.server — inbound Slack webhook
+└─ eve.turn                              eve's turn span — opened and ended inside step 1
+   └─ invoke_agent mealbot               step 1
+      ├─ generate_content anthropic/claude-sonnet-5   the model picks a tool
+      └─ execute_tool find_restaurants                shells out to dd-cli
+
+invoke_agent mealbot                     step 2 — its own segment of the same trace
+├─ generate_content anthropic/claude-sonnet-5
+└─ execute_tool get_menu
+
+invoke_agent mealbot                     step 3
+├─ generate_content anthropic/claude-sonnet-5
+└─ execute_tool estimate_nutrition
+   └─ invoke_agent nutrition-estimator   the tool's own OpenRouter call
+      └─ generate_content openai/gpt-5.6-luna
 ```
+
+Two shapes in there are worth knowing:
+
+- Every `invoke_agent` / `generate_content` / `execute_tool` span appears
+  **twice**, once per origin — see "How the AI spans reach Sentry" above. The
+  tree lists each one once for readability.
+- Only step 1 runs inside `eve.turn`. Each later step restores the turn's trace
+  context as a *remote* parent, which makes it a local root: same trace, own
+  segment, exported on its own. That is what lets a turn's later steps reach
+  Sentry at all on a serverless runtime.
+
+`estimate_nutrition` is the interesting one: its `execute_tool` span contains a
+whole nested agent call, because eve's `registerTelemetry` covers every AI SDK
+call in the process — including one a tool makes itself. Its own
+`telemetry.functionId` keeps it out of the main loop's aggregates.
+
+Tools also emit domain **logs** (`meal.restaurant.presented`,
+`meal.option.presented`, `meal.pick.added`, `meal.checkout.offered`) carrying
+item, price, calories, protein, the conversation id, and the user. Spans stay
+the mechanical record; the logs are the business record a dashboard can sum.
 
 Failed dd-cli invocations throw inside `execute`, so they land in the AI
 Agents dashboard's Tool Errors widget and as linked Sentry issues.
@@ -212,7 +279,7 @@ Agents dashboard's Tool Errors widget and as linked Sentry issues.
   `MEAL_BUDGET_USD`. Model-supplied prices are never trusted.
 - **Nutrition is a tool, not model knowledge**: `estimate_nutrition` makes its
   own structured OpenRouter call (`NUTRITION_MODEL`, default
-  `anthropic/claude-haiku-4.5`). Nutritionix was rejected — its free tier is
+  `openai/gpt-5.6-luna`). Nutritionix was the alternative; its free tier is
   discontinued.
 - **dd-cli `--intent`**: every command sends a fixed, honest two-line intent
   (who the workflow serves and why). It deliberately never includes Slack
@@ -221,14 +288,15 @@ Agents dashboard's Tool Errors widget and as linked Sentry issues.
   int `.min()`/`.max()`) as JSON-Schema integer `minimum`/`maximum` bounds,
   which Azure-hosted models — where OpenRouter may route any call — reject in
   structured output (`AI_APICallError: … properties maximum, minimum are not
-  supported`, seen live on the first Slack turn). Quantities and calories are
-  plain `z.number()` with rounding/clamping in tool code.
+  supported`). Quantities and calories are plain `z.number()` with
+  rounding/clamping in tool code.
 - **Popularity data is ignored** (`is_popular` / `popularity_rank` stripped in
   `get_menu`) — the CLI docs ask agents not to use it.
 - **Idempotency caveat**: Eve re-runs a tool step interrupted mid-execution,
   and `cart add-items` is append-only — a badly timed crash could double-add
   a pick. Acceptable for a demo; a real deployment would de-dupe against
-  `cart show` first.
+  `cart show` first. The card-posting tools do de-dupe, on the triggering
+  Slack message ts.
 - **OpenRouter wiring notes**: the provider instance bypasses the AI Gateway,
   and `modelContextWindowTokens` is set because Eve can't resolve context
   windows for non-gateway models.

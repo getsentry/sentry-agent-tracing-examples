@@ -1,10 +1,11 @@
 /**
  * Mealbot spend seeder — fixture telemetry for the "LLM spend per user"
- * dashboard demo.
+ * dashboard demo. Run it through `npm run seed`, which loads .env and
+ * .env.local for SENTRY_DSN:
  *
- *   node --env-file=.env.local seeder/seed.ts --dry-run --days 4
- *   node --env-file=.env.local seeder/seed.ts --days 4 --spike
- *   node --env-file=.env.local seeder/seed.ts            # small burst, last 3h
+ *   npm run seed -- --dry-run --days 4
+ *   npm run seed -- --days 4 --spike
+ *   npm run seed                          # small burst, last 3h
  *
  * --days N backfills N days before today plus today; capped at 4 because
  * Relay hard-drops transactions older than 5 days (see engine.ts header).
@@ -40,9 +41,8 @@ const dayIncluded = (back: number) =>
 const dryRun = args["dry-run"];
 // Default to a time-derived seed so a rerun never replays the same rng
 // stream — same-seed reruns mint near-identical conversations at shifted
-// timestamps, which read as duplicate rows in conversation tables (observed
-// 2026-08-08 after seeding the same day three times). Pass --seed to
-// reproduce a specific plan deliberately.
+// timestamps, which read as duplicate rows in conversation tables. Pass
+// --seed to reproduce a specific plan deliberately.
 const seedNum = args.seed ? Number(args.seed) : Date.now() % 2147483647;
 const rng = mulberry32(seedNum);
 const seedRun = `seed-${seedNum}-${new Date()
@@ -53,7 +53,7 @@ const now = Date.now() / 1000;
 
 if (!dryRun) {
   if (!process.env.SENTRY_DSN) {
-    console.error("SENTRY_DSN not set — run with --env-file=.env.local");
+    console.error("SENTRY_DSN not set — put it in .env or .env.local");
     process.exit(1);
   }
   Sentry.init({
@@ -61,11 +61,13 @@ if (!dryRun) {
     environment: args.environment,
     debug: Boolean(process.env.SEED_DEBUG),
     tracesSampleRate: 1.0,
-    // Keep each turn's gen_ai spans inside its transaction envelope: one
-    // ingestion path (the one with the documented 5-day backdating window)
-    // instead of transaction + streamed-span halves that could land
-    // inconsistently when backdated.
-    streamGenAiSpans: false, // segment export, matching the agent
+    // streamGenAiSpans is left at its default, the same path the agent uses:
+    // gen_ai spans are lifted out of the transaction and sent as standalone
+    // v2 span items. Those items carry span attributes only, not the
+    // event-level user each conversation sets on its isolation scope, which
+    // is why engine.ts also stamps user.id on every seeded gen_ai span —
+    // exactly what the live agent does in beforeSendSpan. Fixture and live
+    // data then have the same shape.
     defaultIntegrations: false,
   });
 }
@@ -74,9 +76,9 @@ const samples: SpendSample[] = [];
 let sentSinceFlush = 0;
 
 // A single flush of ~200 backdated transactions trips Relay's rate limiting
-// and the SDK then silently drops the rest of the queue (observed live
-// 2026-08-08: days 3-4 of a --days 4 run never arrived). Draining every few
-// conversations keeps the send rate under the limit.
+// and the SDK then silently drops the rest of the queue — the last days of a
+// --days 4 run never arrive. Draining every few conversations keeps the send
+// rate under the limit.
 async function pace(): Promise<void> {
   sentSinceFlush += 1;
   if (dryRun || sentSinceFlush < 10) return;

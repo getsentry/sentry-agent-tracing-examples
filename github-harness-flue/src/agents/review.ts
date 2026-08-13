@@ -155,3 +155,9 @@ ${sentryIssuesEnabled ? '5.' : '4.'} Publish the review with the post_review too
 
 ${prDescription ? `PR description:\n---\n${prDescription}\n---\n\n` : ''}Finish by replying with the verdict line only.`;
 }
+
+// The agent's durable identity, which flue also reports as `gen_ai.agent.name`.
+// Pinned to kebab-case so the lead groups alongside its two subagents in
+// Sentry's AI views; the exported function stays capitalized because that is
+// how the 'use agent' scan finds it.
+ReviewLead.agentName = 'review-lead';

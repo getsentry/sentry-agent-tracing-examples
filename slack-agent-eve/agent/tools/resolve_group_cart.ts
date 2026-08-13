@@ -1,12 +1,6 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import {
-  cartLinkToken,
-  mealBudgetUsd,
-  runDd,
-  showCart,
-  type CartSummary,
-} from "../lib/dd";
+import { cartLinkToken, ddCartList, mealBudgetUsd, showCart, type CartSummary } from "../lib/dd";
 
 export default defineTool({
   description:
@@ -19,16 +13,14 @@ export default defineTool({
   }),
   async execute({ groupOrderLink }) {
     const fallbackBudgetUsd = mealBudgetUsd();
-    const list = await runDd(["cart", "list"]);
-    const carts = (list.carts ?? []) as { cart_uuid?: string }[];
+    const cartUuids = await ddCartList();
 
     // The share link is an opaque short token, not the cart UUID, so the only
     // resolution path is comparing it against each open cart's group_cart_url
     // (cart list omits that field; cart show carries it).
     const groupCarts: CartSummary[] = [];
-    for (const cart of carts) {
-      if (!cart.cart_uuid) continue;
-      const summary = await showCart(cart.cart_uuid);
+    for (const cartUuid of cartUuids) {
+      const summary = await showCart(cartUuid);
       if (summary.isGroupCart) groupCarts.push(summary);
     }
 

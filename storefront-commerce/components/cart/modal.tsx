@@ -17,10 +17,6 @@ import { DeleteItemButton } from "./delete-item-button";
 import { EditItemQuantityButton } from "./edit-item-quantity-button";
 import OpenCart from "./open-cart";
 
-type MerchandiseSearchParams = {
-  [key: string]: string;
-};
-
 export default function CartModal() {
   const { cart, updateCartItem } = useCart();
   const [isOpen, setIsOpen] = useState(false);
@@ -99,21 +95,16 @@ export default function CartModal() {
                         ),
                       )
                       .map((item, i) => {
-                        const merchandiseSearchParams =
-                          {} as MerchandiseSearchParams;
-
-                        item.merchandise.selectedOptions.forEach(
-                          ({ name, value }) => {
-                            if (value !== DEFAULT_OPTION) {
-                              merchandiseSearchParams[name.toLowerCase()] =
-                                value;
-                            }
-                          },
-                        );
-
                         const merchandiseUrl = createUrl(
                           `/product/${item.merchandise.product.handle}`,
-                          new URLSearchParams(merchandiseSearchParams),
+                          new URLSearchParams(
+                            item.merchandise.selectedOptions
+                              .filter(({ value }) => value !== DEFAULT_OPTION)
+                              .map(({ name, value }) => [
+                                name.toLowerCase(),
+                                value,
+                              ]),
+                          ),
                         );
 
                         return (

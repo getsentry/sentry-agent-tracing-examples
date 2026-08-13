@@ -2,15 +2,42 @@
  * Conversation templates. Each scenario is a sequence of turns; a turn is
  * one user message followed by the agent's tool-call loop — which becomes
  * one trace of (chat → execute_tool)* → chat spans, mirroring how eve runs
- * a real Slack turn. Tool names match the six real tools in agent/tools/ so
- * seeded traces read like genuine agent traffic in the Tools insights
- * view and trace waterfall.
+ * a real Slack turn. The tool names are real ones from agent/tools/, so
+ * seeded traces group with live traffic in the Tools insights view. The
+ * arguments and results below are illustrative: they read like plausible
+ * lunch traffic and are deliberately not copies of each tool's inputSchema.
  */
 
+/** JSON as the fixtures carry it. `undefined` is admitted because that is
+ * what an absent key reads as, and what JSON.stringify then drops. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
+
+export type JsonObject = { [key: string]: JsonValue | undefined };
+
+/** The agent/tools/ names the fixtures are allowed to reference. */
+export type SeededToolName =
+  | "get_menu"
+  | "get_item_details"
+  | "estimate_nutrition"
+  | "present_meal_options"
+  | "add_to_cart"
+  | "resolve_group_cart";
+
+/** Every scenario the personas can be assigned. Keyed exhaustively below. */
+export type ScenarioKey =
+  | "quick-menu"
+  | "details"
+  | "dietary"
+  | "nutrition-deep"
+  | "group-order"
+  | "cart-resolve"
+  | "indecisive"
+  | "chitchat";
+
 export interface ToolCall {
-  tool: string;
-  args: Record<string, unknown>;
-  result: unknown;
+  tool: SeededToolName;
+  args: JsonObject;
+  result: JsonValue;
 }
 
 export interface Turn {
@@ -22,7 +49,7 @@ export interface Turn {
 }
 
 export interface Scenario {
-  key: string;
+  key: ScenarioKey;
   turns: Turn[];
   /** Base system+menu context in tokens before persona contextScale. */
   contextTokens: number;
@@ -48,7 +75,7 @@ const nutrition = (item: string, cal: number, protein: number) => ({
   confidence: "estimate",
 });
 
-export const SCENARIOS: Record<string, Scenario> = {
+export const SCENARIOS = {
   "quick-menu": {
     key: "quick-menu",
     contextTokens: 3200,
@@ -277,7 +304,17 @@ export const SCENARIOS: Record<string, Scenario> = {
       },
     ],
   },
-};
+} satisfies Record<ScenarioKey, Scenario>;
+
+export interface SpikeScenario {
+  key: string;
+  contextTokens: number;
+  userText: string;
+  failingTool: SeededToolName;
+  toolError: string;
+  retries: number;
+  finalText: string;
+}
 
 /**
  * The runaway turn behind the anomaly-alert demo: estimate_nutrition starts
@@ -294,4 +331,4 @@ export const SPIKE_SCENARIO = {
   retries: 18,
   finalText:
     "I couldn't finish the macro sheet — the nutrition service kept timing out, so I've posted what I had for 2 of 6 items and flagged the rest. Will retry after lunch.",
-};
+} satisfies SpikeScenario;

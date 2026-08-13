@@ -1,6 +1,16 @@
 import * as Sentry from "@sentry/node";
-import { MODEL_RATES, type Persona } from "./personas.ts";
-import { SCENARIOS, SPIKE_SCENARIO, type Scenario, type Turn } from "./scenarios.ts";
+import { AGENT_NAME } from "../agent/lib/agent-name.ts";
+import { MODEL_RATES, type ModelId, type Persona } from "./personas.ts";
+import {
+  SCENARIOS,
+  SPIKE_SCENARIO,
+  type JsonObject,
+  type JsonValue,
+  type Scenario,
+  type ScenarioKey,
+  type SeededToolName,
+  type Turn,
+} from "./scenarios.ts";
 
 /**
  * Emits hand-built gen_ai spans following Sentry's AI-agents conventions
@@ -11,15 +21,14 @@ import { SCENARIOS, SPIKE_SCENARIO, type Scenario, type Turn } from "./scenarios
  * OpenRouter model id are sent — Sentry's Relay computes the USD cost
  * attributes (gen_ai.cost.*) server-side from its own pricing feed.
  *
- * Backdating bounds (verified in research/llm-spend-per-user-dashboard.md):
- * transactions are dropped outside now-5d..now+60s, so the seeder never
- * reaches further back than 4.5 days.
+ * Backdating bounds: Relay drops transactions outside now-5d..now+60s, so the
+ * seeder never reaches further back than 4.5 days.
  */
 
 export interface SpendSample {
   day: string;
   user: string;
-  model: string;
+  model: ModelId;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -54,9 +63,9 @@ function pickWeighted<T>(rng: Rng, entries: Array<[T, number]>): T {
 }
 
 /** ~4 chars per token, the usual rough English/JSON heuristic. */
-const tokensFor = (value: unknown) => Math.ceil(JSON.stringify(value).length / 4);
+const tokensFor = (value: JsonValue) => Math.ceil(JSON.stringify(value).length / 4);
 
-const TOOL_LATENCY: Record<string, [number, number]> = {
+const TOOL_LATENCY = {
   get_menu: [0.3, 1.2],
   get_item_details: [0.2, 0.8],
   // estimate_nutrition makes its own model call, hence the long tail
@@ -64,7 +73,7 @@ const TOOL_LATENCY: Record<string, [number, number]> = {
   present_meal_options: [0.4, 1.5],
   add_to_cart: [0.15, 0.5],
   resolve_group_cart: [1.0, 3.0],
-};
+} satisfies Record<SeededToolName, [number, number]>;
 
 interface ChatUsage {
   input: number;
@@ -72,9 +81,8 @@ interface ChatUsage {
   cacheRead: number;
 }
 
-function projectUsd(model: string, usage: ChatUsage): number {
+function projectUsd(model: ModelId, usage: ChatUsage): number {
   const rates = MODEL_RATES[model];
-  if (!rates) return 0;
   return (
     (usage.input - usage.cacheRead) * rates.input +
     usage.cacheRead * rates.cachedInput +
@@ -82,11 +90,39 @@ function projectUsd(model: string, usage: ChatUsage): number {
   );
 }
 
+/**
+ * gen_ai.input.messages / gen_ai.output.messages carry a JSON array of
+ * role-plus-parts messages (@sentry/conventions attributes.d.ts).
+ */
+interface TextPart {
+  type: "text";
+  content: string;
+}
+
+interface ToolCallPart {
+  type: "tool_call";
+  id: string;
+  name: SeededToolName;
+  arguments: JsonObject;
+}
+
+interface ToolResponsePart {
+  type: "tool_call_response";
+  id: string;
+  result: string;
+}
+
+interface GenAiMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  parts: Array<TextPart | ToolCallPart | ToolResponsePart>;
+  finish_reason?: string;
+}
+
 interface TurnContext {
   rng: Rng;
   persona: Persona;
   scenario: Scenario;
-  model: string;
+  model: ModelId;
   conversationId: string;
   seedRun: string;
   turnIndex: number;
@@ -101,60 +137,73 @@ interface TurnContext {
  */
 const at = (sec: number) => new Date(sec * 1000);
 
-function chatSpan(
-  ctx: TurnContext,
-  opts: {
-    start: number;
-    usage: ChatUsage;
-    requestMessages: unknown[];
-    responseText?: string;
-    toolChoice?: { tool: string; args: unknown };
-  },
-): number {
+interface ChatSpanInput {
+  start: number;
+  usage: ChatUsage;
+  inputMessages: GenAiMessage[];
+  outputMessages: GenAiMessage[];
+}
+
+// Written as a type alias, not an interface: Sentry's attributes bag is an
+// index-signature type, and only type aliases get an implicit one.
+type ChatSpanAttributes = {
+  "gen_ai.operation.name": string;
+  "gen_ai.provider.name": string;
+  "gen_ai.request.model": string;
+  "gen_ai.response.model": string;
+  "gen_ai.usage.input_tokens": number;
+  "gen_ai.usage.output_tokens": number;
+  "gen_ai.usage.total_tokens": number;
+  "gen_ai.usage.cache_read.input_tokens"?: number;
+  "gen_ai.conversation.id": string;
+  "gen_ai.input.messages": string;
+  "gen_ai.output.messages": string;
+  // Standalone gen_ai spans travel without the transaction's event-level
+  // user, so the dashboard's group-by key rides on the span itself — the
+  // live agent stamps the same attribute in beforeSendSpan.
+  "user.id": string;
+  "demo.seed_run": string;
+};
+
+function chatSpan(ctx: TurnContext, opts: ChatSpanInput): number {
   const { rng, model } = ctx;
   const duration =
     0.5 + opts.usage.output / uniform(rng, 30, 70) + uniform(rng, 0.2, 0.9);
   const end = opts.start + duration;
+  const attributes: ChatSpanAttributes = {
+    "gen_ai.operation.name": "chat",
+    "gen_ai.provider.name": "openrouter",
+    "gen_ai.request.model": model,
+    "gen_ai.response.model": model,
+    "gen_ai.usage.input_tokens": opts.usage.input,
+    "gen_ai.usage.output_tokens": opts.usage.output,
+    "gen_ai.usage.total_tokens": opts.usage.input + opts.usage.output,
+    "gen_ai.conversation.id": ctx.conversationId,
+    "gen_ai.input.messages": JSON.stringify(opts.inputMessages).slice(0, 4000),
+    "gen_ai.output.messages": JSON.stringify(opts.outputMessages).slice(0, 4000),
+    "user.id": ctx.persona.id,
+    "demo.seed_run": ctx.seedRun,
+  };
+  if (opts.usage.cacheRead > 0) {
+    attributes["gen_ai.usage.cache_read.input_tokens"] = opts.usage.cacheRead;
+  }
   Sentry.startSpan(
-    {
-      op: "gen_ai.chat",
-      name: `chat ${model}`,
-      startTime: at(opts.start),
-      attributes: {
-        "gen_ai.operation.name": "chat",
-        "gen_ai.system": "openrouter",
-        "gen_ai.provider.name": "openrouter",
-        "gen_ai.request.model": model,
-        "gen_ai.response.model": model,
-        "gen_ai.usage.input_tokens": opts.usage.input,
-        "gen_ai.usage.output_tokens": opts.usage.output,
-        "gen_ai.usage.total_tokens": opts.usage.input + opts.usage.output,
-        ...(opts.usage.cacheRead > 0
-          ? { "gen_ai.usage.cache_read.input_tokens": opts.usage.cacheRead }
-          : {}),
-        "gen_ai.conversation.id": ctx.conversationId,
-        "gen_ai.request.messages": JSON.stringify(opts.requestMessages).slice(0, 4000),
-        ...(opts.responseText ? { "gen_ai.response.text": opts.responseText } : {}),
-        ...(opts.toolChoice
-          ? {
-              "gen_ai.response.tool_calls": JSON.stringify([
-                { name: opts.toolChoice.tool, arguments: opts.toolChoice.args },
-              ]),
-            }
-          : {}),
-        "demo.seed_run": ctx.seedRun,
-      },
-    },
+    { op: "gen_ai.chat", name: `chat ${model}`, startTime: at(opts.start), attributes },
     (span) => span.end(at(end)),
   );
   return end;
 }
 
-function toolSpan(
-  ctx: TurnContext,
-  opts: { start: number; tool: string; args: unknown; result: unknown; error?: string },
-): number {
-  const [lo, hi] = TOOL_LATENCY[opts.tool] ?? [0.2, 1.0];
+interface ToolSpanInput {
+  start: number;
+  tool: SeededToolName;
+  args: JsonObject;
+  result: JsonValue;
+  error?: string;
+}
+
+function toolSpan(ctx: TurnContext, opts: ToolSpanInput): number {
+  const [lo, hi] = TOOL_LATENCY[opts.tool];
   const end = opts.start + uniform(ctx.rng, lo, hi);
   Sentry.startSpan(
     {
@@ -168,19 +217,52 @@ function toolSpan(
         "gen_ai.tool.call.arguments": JSON.stringify(opts.args),
         "gen_ai.tool.call.result": JSON.stringify(opts.error ?? opts.result).slice(0, 4000),
         "gen_ai.conversation.id": ctx.conversationId,
+        "user.id": ctx.persona.id,
         "demo.seed_run": ctx.seedRun,
       },
     },
     (span) => {
-      if (opts.error) span.setStatus({ code: 2, message: "internal_error" });
+      if (opts.error) {
+        span.setStatus({ code: 2, message: "internal_error" });
+        // A live tool failure throws inside execute, and the ai:telemetry
+        // subscriber turns that into an issue linked to the span. Capturing
+        // here from inside the span gives the fixture the same link, so the
+        // Tool Errors widget has an issue to open. The event timestamp is
+        // "now" — only the spans are backdated.
+        Sentry.withScope((scope) => {
+          scope.setTag("gen_ai.conversation.id", ctx.conversationId);
+          scope.setTag("gen_ai.tool.name", opts.tool);
+          scope.setUser({ id: ctx.persona.id, username: ctx.persona.username });
+          Sentry.captureException(new Error(opts.error));
+        });
+      }
       span.end(at(end));
     },
   );
   return end;
 }
 
+interface TurnOutcome {
+  endSec: number;
+  usage: ChatUsage;
+  usd: number;
+}
+
+// Same reason as ChatSpanAttributes: assigned into Sentry's attributes bag.
+type AgentSpanUsage = {
+  "gen_ai.usage.input_tokens": number;
+  "gen_ai.usage.output_tokens": number;
+  "gen_ai.usage.total_tokens": number;
+  "gen_ai.usage.cache_read.input_tokens"?: number;
+  "gen_ai.output.messages": string;
+};
+
+const assistantText = (content: string): GenAiMessage[] => [
+  { role: "assistant", parts: [{ type: "text", content }], finish_reason: "stop" },
+];
+
 /** One user message + the agent's tool loop = one trace, as in real eve. */
-function runTurn(ctx: TurnContext, turn: Turn, startSec: number): { end: number; usage: ChatUsage; usd: number } {
+function runTurn(ctx: TurnContext, turn: Turn, startSec: number): TurnOutcome {
   const { rng, persona, scenario } = ctx;
   const base =
     Math.round(scenario.contextTokens * persona.contextScale * uniform(rng, 0.9, 1.15)) +
@@ -209,15 +291,15 @@ function runTurn(ctx: TurnContext, turn: Turn, startSec: number): { end: number;
         Sentry.startSpan(
           {
             op: "gen_ai.invoke_agent",
-            name: "invoke_agent doordash-agent",
+            name: `invoke_agent ${AGENT_NAME}`,
             startTime: at(agentStart),
             attributes: {
               "gen_ai.operation.name": "invoke_agent",
-              "gen_ai.agent.name": "doordash-agent",
-              "gen_ai.system": "openrouter",
+              "gen_ai.agent.name": AGENT_NAME,
               "gen_ai.provider.name": "openrouter",
               "gen_ai.request.model": ctx.model,
               "gen_ai.conversation.id": ctx.conversationId,
+              "user.id": ctx.persona.id,
               "demo.seed_run": ctx.seedRun,
             },
           },
@@ -225,12 +307,15 @@ function runTurn(ctx: TurnContext, turn: Turn, startSec: number): { end: number;
             let cursor = agentStart + uniform(rng, 0.05, 0.2);
             let input = base + tokensFor(turn.userText);
             let prevOutput = 0;
-            const messages: unknown[] = [
-              { role: "system", content: "You are Mealbot, the DoorDash ordering bot." },
-              { role: "user", content: turn.userText },
+            const history: GenAiMessage[] = [
+              {
+                role: "system",
+                parts: [{ type: "text", content: "You are Mealbot, the DoorDash ordering bot." }],
+              },
+              { role: "user", parts: [{ type: "text", content: turn.userText }] },
             ];
 
-            const step = (usage: ChatUsage, opts: Parameters<typeof chatSpan>[1]) => {
+            const step = (usage: ChatUsage, opts: ChatSpanInput) => {
               totals.input += usage.input;
               totals.output += usage.output;
               totals.cacheRead += usage.cacheRead;
@@ -240,6 +325,7 @@ function runTurn(ctx: TurnContext, turn: Turn, startSec: number): { end: number;
 
             for (let i = 0; i < turn.toolCalls.length; i++) {
               const call = turn.toolCalls[i];
+              const callId = `call_seed_${ctx.turnIndex}_${i}`;
               const cacheRead =
                 i === 0
                   ? ctx.turnIndex > 0
@@ -247,18 +333,30 @@ function runTurn(ctx: TurnContext, turn: Turn, startSec: number): { end: number;
                     : 0
                   : Math.round(input * uniform(rng, 0.65, 0.85));
               const output = randint(rng, 35, 95);
+              const toolCallPart: ToolCallPart = {
+                type: "tool_call",
+                id: callId,
+                name: call.tool,
+                arguments: call.args,
+              };
               step(
                 { input, output, cacheRead },
                 {
                   start: cursor,
                   usage: { input, output, cacheRead },
-                  requestMessages: messages,
-                  toolChoice: { tool: call.tool, args: call.args },
+                  inputMessages: [...history],
+                  outputMessages: [
+                    { role: "assistant", parts: [toolCallPart], finish_reason: "tool_calls" },
+                  ],
                 },
               );
               cursor = toolSpan(ctx, { start: cursor, tool: call.tool, args: call.args, result: call.result }) +
                 uniform(rng, 0.02, 0.08);
-              messages.push({ role: "tool", name: call.tool, content: "[result]" });
+              history.push({ role: "assistant", parts: [toolCallPart] });
+              history.push({
+                role: "tool",
+                parts: [{ type: "tool_call_response", id: callId, result: "[result]" }],
+              });
               prevOutput = output;
               input += tokensFor(call.result) + prevOutput + 20;
             }
@@ -275,21 +373,22 @@ function runTurn(ctx: TurnContext, turn: Turn, startSec: number): { end: number;
               {
                 start: cursor,
                 usage: { input, output: finalOutput, cacheRead: finalCache },
-                requestMessages: messages,
-                responseText: turn.finalText,
+                inputMessages: [...history],
+                outputMessages: assistantText(turn.finalText),
               },
             );
 
             ctx.priorInput = input;
-            agentSpan.setAttributes({
+            const usage: AgentSpanUsage = {
               "gen_ai.usage.input_tokens": totals.input,
               "gen_ai.usage.output_tokens": totals.output,
               "gen_ai.usage.total_tokens": totals.input + totals.output,
-              ...(totals.cacheRead > 0
-                ? { "gen_ai.usage.cache_read.input_tokens": totals.cacheRead }
-                : {}),
-              "gen_ai.response.text": turn.finalText,
-            });
+              "gen_ai.output.messages": JSON.stringify(assistantText(turn.finalText)).slice(0, 4000),
+            };
+            if (totals.cacheRead > 0) {
+              usage["gen_ai.usage.cache_read.input_tokens"] = totals.cacheRead;
+            }
+            agentSpan.setAttributes(usage);
             turnEnd = cursor;
             agentSpan.end(at(cursor));
           },
@@ -299,7 +398,7 @@ function runTurn(ctx: TurnContext, turn: Turn, startSec: number): { end: number;
     );
   });
 
-  return { end: turnEnd, usage: totals, usd };
+  return { endSec: turnEnd, usage: totals, usd };
 }
 
 export function runConversation(opts: {
@@ -307,7 +406,7 @@ export function runConversation(opts: {
   persona: Persona;
   startSec: number;
   seedRun: string;
-  scenarioKey?: string;
+  scenarioKey?: ScenarioKey;
 }): SpendSample {
   const { rng, persona } = opts;
   const scenarioKey = opts.scenarioKey ?? pickWeighted(rng, persona.scenarioWeights);
@@ -341,13 +440,13 @@ export function runConversation(opts: {
     let cursor = opts.startSec;
     for (let i = 0; i < scenario.turns.length; i++) {
       ctx.turnIndex = i;
-      const { end, usage, usd } = runTurn(ctx, scenario.turns[i], cursor);
+      const { endSec, usage, usd } = runTurn(ctx, scenario.turns[i], cursor);
       sample.inputTokens += usage.input;
       sample.outputTokens += usage.output;
       sample.cacheReadTokens += usage.cacheRead;
       sample.projectedUsd += usd;
       // The user reads the reply, thinks, types the follow-up.
-      cursor = end + uniform(rng, 30, 240);
+      cursor = endSec + uniform(rng, 30, 240);
     }
   });
 
@@ -402,15 +501,15 @@ export function runSpike(opts: {
           Sentry.startSpan(
             {
               op: "gen_ai.invoke_agent",
-              name: "invoke_agent doordash-agent",
+              name: `invoke_agent ${AGENT_NAME}`,
               startTime: at(opts.startSec + 0.1),
               attributes: {
                 "gen_ai.operation.name": "invoke_agent",
-                "gen_ai.agent.name": "doordash-agent",
-                "gen_ai.system": "openrouter",
+                "gen_ai.agent.name": AGENT_NAME,
                 "gen_ai.provider.name": "openrouter",
                 "gen_ai.request.model": model,
                 "gen_ai.conversation.id": conversationId,
+                "user.id": persona.id,
                 "demo.seed_run": opts.seedRun,
               },
             },
@@ -437,15 +536,38 @@ export function runSpike(opts: {
                 cursor = chatSpan(ctx, {
                   start: cursor,
                   usage: { input, output, cacheRead },
-                  requestMessages: [
-                    { role: "system", content: "You are Mealbot, the DoorDash ordering bot." },
-                    { role: "user", content: SPIKE_SCENARIO.userText },
-                    { role: "assistant", content: `[retry ${attempt} of ${SPIKE_SCENARIO.retries}]` },
+                  inputMessages: [
+                    {
+                      role: "system",
+                      parts: [
+                        { type: "text", content: "You are Mealbot, the DoorDash ordering bot." },
+                      ],
+                    },
+                    { role: "user", parts: [{ type: "text", content: SPIKE_SCENARIO.userText }] },
+                    {
+                      role: "assistant",
+                      parts: [
+                        {
+                          type: "text",
+                          content: `[retry ${attempt} of ${SPIKE_SCENARIO.retries}]`,
+                        },
+                      ],
+                    },
                   ],
-                  toolChoice: {
-                    tool: SPIKE_SCENARIO.failingTool,
-                    args: { itemId: "menu-sweep", attempt },
-                  },
+                  outputMessages: [
+                    {
+                      role: "assistant",
+                      parts: [
+                        {
+                          type: "tool_call",
+                          id: `call_seed_spike_${attempt}`,
+                          name: SPIKE_SCENARIO.failingTool,
+                          arguments: { itemId: "menu-sweep", attempt },
+                        },
+                      ],
+                      finish_reason: "tool_calls",
+                    },
+                  ],
                 });
                 cursor = toolSpan(ctx, {
                   start: cursor,
@@ -469,15 +591,19 @@ export function runSpike(opts: {
               cursor = chatSpan(ctx, {
                 start: cursor,
                 usage: { input, output: finalOutput, cacheRead: basePrefix },
-                requestMessages: [{ role: "user", content: SPIKE_SCENARIO.userText }],
-                responseText: SPIKE_SCENARIO.finalText,
+                inputMessages: [
+                  { role: "user", parts: [{ type: "text", content: SPIKE_SCENARIO.userText }] },
+                ],
+                outputMessages: assistantText(SPIKE_SCENARIO.finalText),
               });
               agentSpan.setAttributes({
                 "gen_ai.usage.input_tokens": sample.inputTokens,
                 "gen_ai.usage.output_tokens": sample.outputTokens,
                 "gen_ai.usage.total_tokens": sample.inputTokens + sample.outputTokens,
                 "gen_ai.usage.cache_read.input_tokens": sample.cacheReadTokens,
-                "gen_ai.response.text": SPIKE_SCENARIO.finalText,
+                "gen_ai.output.messages": JSON.stringify(
+                  assistantText(SPIKE_SCENARIO.finalText),
+                ).slice(0, 4000),
               });
               agentSpan.end(at(cursor));
               root.end(at(cursor + 0.05));

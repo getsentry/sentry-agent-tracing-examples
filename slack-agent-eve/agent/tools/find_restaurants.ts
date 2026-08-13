@@ -1,6 +1,6 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { defaultDeliveryPoint, searchRestaurants, storeIsOpen } from "../lib/dd";
+import { ddSearch, defaultDeliveryPoint, storeIsOpen } from "../lib/dd";
 import type { Restaurant } from "../lib/dd";
 
 // Long enough for a healthy probe round, short enough that a stalled one
@@ -21,7 +21,7 @@ export default defineTool({
     const wanted = Math.min(10, Math.max(3, Math.round(limit ?? 8)));
     // Over-fetch: closed stores are dropped below, so the search needs slack.
     const [candidates, point] = await Promise.all([
-      searchRestaurants(query, Math.min(12, wanted + 4)),
+      ddSearch(query, Math.min(12, wanted + 4)),
       defaultDeliveryPoint(),
     ]);
 

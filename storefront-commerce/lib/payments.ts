@@ -19,13 +19,17 @@ export function issueRefund({
       attributes: {
         "http.request.method": "POST",
         "url.full": "https://api.acmepay.test/v1/refunds",
-        "http.response.status_code": 201,
+        // Sentry's HTTP insights group outbound calls by domain.
+        "server.address": "api.acmepay.test",
       },
     },
     async () => {
       await new Promise((resolve) =>
         setTimeout(resolve, 120 + Math.random() * 180),
       );
+      // A response attribute, so it is set once the response exists rather
+      // than guessed when the span opens.
+      Sentry.getActiveSpan()?.setAttribute("http.response.status_code", 201);
       return {
         refundId: `re_${chargeId.slice(3)}`,
         amount,

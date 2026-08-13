@@ -1,8 +1,13 @@
 import * as Sentry from "@sentry/node";
-import { callSlackApi } from "eve/channels/slack";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { conversationStash } from "../lib/conversation";
+import {
+  imageAccessory,
+  postCard,
+  type SlackBlock,
+  type SlackButtonElement,
+} from "../lib/slack-blocks";
 
 const optionSchema = z.object({
   lane: z.string().min(1).describe('Short lane label, e.g. "Protein-heavy", "Balanced", "Junk"'),
@@ -17,22 +22,29 @@ const optionSchema = z.object({
   imageUrl: z.string().nullish().describe("imageUrl of the main item from get_menu; omit when it has none"),
 });
 
-type SlackBlock = Record<string, unknown>;
-
 // One card per triggering Slack message. Eve's workflow queue is
-// at-least-once: a transport failure mid-turn redelivers and re-runs any
-// step that had not checkpointed, and the re-generated tool call posts a
-// second (different!) card — observed live 2026-08-08 ("TypeError: fetch
-// failed" at the queue loop). The trigger message_ts is stable across
-// redeliveries, so it makes a natural idempotency key; a genuine
-// "show me other options" arrives on a new message_ts and still posts.
+// at-least-once: a transport failure mid-turn redelivers and re-runs any step
+// that had not checkpointed, and the re-generated tool call posts a second
+// (and different) card. The trigger message_ts is stable across redeliveries,
+// so it makes a natural idempotency key; a genuine "show me other options"
+// arrives on a new message_ts and still posts.
 const postedCards = new Map<string, string>();
 
-// Slack never unfurls links in eve-posted messages (the channel hardcodes
-// unfurl_links/unfurl_media off), so photos only render as Block Kit images.
-// Raw blocks rather than eve's cardToBlocks: an image inside a section
-// `accessory` renders as a compact square thumbnail — consistent crop, short
-// message — while eve's card path only emits full-width image blocks.
+// Alias, not interface: only aliases get the implicit index signature that
+// Sentry.logger's Record<string, unknown> attribute bag requires.
+type MealOptionLog = {
+  "meal.store": string;
+  "meal.option_index": number;
+  "meal.lane": string;
+  "meal.item": string;
+  "meal.price_usd": number;
+  "meal.budget_usd": number;
+  "meal.calories"?: number;
+  "meal.protein_g"?: number;
+  "gen_ai.conversation.id"?: string;
+  "user.id"?: string;
+};
+
 export default defineTool({
   description:
     "Post the meal options into the Slack thread as a rich card with photo thumbnails, prices, and nutrition. Always use this instead of listing the options in reply text when the request came from Slack. Copy channelId and threadTs from the <slack_message> envelope of the triggering message.",
@@ -96,7 +108,7 @@ export default defineTool({
           },
         ],
       },
-      ...options.map((option, index) => {
+      ...options.map((option, index): SlackBlock => {
         const stats = [
           `$${option.priceUsd.toFixed(2)}`,
           option.calories != null ? `~${Math.round(option.calories)} cal` : undefined,
@@ -104,28 +116,19 @@ export default defineTool({
         ]
           .filter(Boolean)
           .join(" · ");
-        const section: SlackBlock = {
+        return {
           type: "section",
           text: {
             type: "mrkdwn",
             text: `*${index + 1}. ${option.lane} — ${option.title}*\n${stats}\n${option.blurb}`.slice(0, 3000),
           },
+          accessory: imageAccessory(option.imageUrl, option.title),
         };
-        if (option.imageUrl && option.imageUrl.length <= 3000) {
-          section.accessory = {
-            type: "image",
-            image_url: option.imageUrl,
-            alt_text: option.title.slice(0, 2000),
-          };
-        }
-        return section;
       }),
       {
         type: "actions",
-        elements: options.map((option, index) => ({
+        elements: options.map((option, index): SlackButtonElement => ({
           type: "button",
-          // The eve_input: action_id prefix is reserved for eve's HITL
-          // pipeline; anything else is forwarded to our onInteraction hook.
           action_id: `pick_option_${index + 1}`,
           value: `${option.title} ($${option.priceUsd.toFixed(2)})`.slice(0, 2000),
           text: { type: "plain_text", text: `Pick ${index + 1}` },
@@ -137,41 +140,35 @@ export default defineTool({
       .map((o, i) => `${i + 1}. ${o.lane}: ${o.title} — $${o.priceUsd.toFixed(2)}`)
       .join(" · ");
 
-    const response = await callSlackApi({
-      botToken: undefined, // resolves process.env.SLACK_BOT_TOKEN, same as the channel
-      operation: "chat.postMessage",
-      body: {
-        channel: channelId,
-        thread_ts: threadTs,
-        blocks,
-        text: `${mealLabel} — ${storeName}: ${fallback}`,
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`chat.postMessage failed: ${response.error ?? "unknown_error"}`);
-    }
-    const messageTs = (response.ts as string | undefined) ?? null;
-    postedCards.set(dedupeKey, messageTs ?? "posted");
+    const posted = await postCard(
+      channelId,
+      threadTs,
+      blocks,
+      `${mealLabel} — ${storeName}: ${fallback}`,
+    );
+    postedCards.set(dedupeKey, posted.ts ?? "posted");
 
     // One domain event per offered option — lets dashboards compare what
     // was offered against what got picked (meal.pick.added), by lane,
-    // price, and nutrition.
+    // price, and nutrition. The conversation id comes from the stash, not
+    // from the model's threadTs argument, so it always matches the spans.
     const conv = conversationStash();
     for (const [index, option] of options.entries()) {
-      Sentry.logger.info("meal.option.presented", {
+      const attributes: MealOptionLog = {
         "meal.store": storeName,
         "meal.option_index": index + 1,
         "meal.lane": option.lane,
         "meal.item": option.title,
         "meal.price_usd": option.priceUsd,
         "meal.budget_usd": budgetUsd,
-        ...(option.calories != null ? { "meal.calories": Math.round(option.calories) } : {}),
-        ...(option.proteinG != null ? { "meal.protein_g": Math.round(option.proteinG) } : {}),
-        "conversation.id": threadTs,
-        ...(conv?.userId ? { "user.id": conv.userId } : {}),
-      });
+      };
+      if (option.calories != null) attributes["meal.calories"] = Math.round(option.calories);
+      if (option.proteinG != null) attributes["meal.protein_g"] = Math.round(option.proteinG);
+      if (conv?.threadTs) attributes["gen_ai.conversation.id"] = conv.threadTs;
+      if (conv?.userId) attributes["user.id"] = conv.userId;
+      Sentry.logger.info("meal.option.presented", attributes);
     }
 
-    return { posted: true, messageTs };
+    return { posted: true, messageTs: posted.ts };
   },
 });

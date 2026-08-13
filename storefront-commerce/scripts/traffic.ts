@@ -11,8 +11,17 @@
  * the traces carry the same spans a browser session produces — gen_ai chat,
  * tool executions, and the db.query spans underneath them.
  */
+import {
+  DefaultChatTransport,
+  getToolName,
+  isTextUIPart,
+  isToolUIPart,
+  readUIMessageStream,
+} from "ai";
 import { parseArgs } from "node:util";
 import { PERSONAS, scenario } from "./scenarios.ts";
+
+import type { UIMessage } from "ai";
 
 const { values: args } = parseArgs({
   options: {
@@ -30,6 +39,9 @@ const baseUrl = args["base-url"]!.replace(/\/$/, "");
 const concurrency = Math.max(1, Number(args.concurrency));
 const seedNum = args.seed ? Number(args.seed) : Date.now() % 2147483647;
 const dryRun = args["dry-run"];
+/** Sent as x-demo-run and tagged onto every span the route opens, so one batch
+ * of seeded conversations can be told apart from real browser sessions. */
+const seedRun = `traffic-${seedNum}`;
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -63,73 +75,65 @@ const conversationId = () =>
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-interface UIMessage {
-  id: string;
-  role: "user" | "assistant";
-  parts: { type: "text"; text: string }[];
-}
-
 interface TurnResult {
   text: string;
   toolCalls: string[];
   toolErrors: number;
 }
 
-/** Reads the UI message stream to the end. The reply text is needed for the
- * next turn's history; the tool names are only for the console log. */
-async function readStream(
-  body: ReadableStream<Uint8Array>,
-): Promise<TurnResult> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  const result: TurnResult = { text: "", toolCalls: [], toolErrors: 0 };
-  let buffer = "";
+// The same transport the browser chat panel uses, so the seeded turns exercise
+// the SSE framing and chunk schema the app ships with instead of a copy that
+// drifts when a chunk type is renamed.
+const transport = new DefaultChatTransport<UIMessage>({
+  api: `${baseUrl}/api/chat`,
+});
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    let cut: number;
-    while ((cut = buffer.indexOf("\n\n")) !== -1) {
-      const block = buffer.slice(0, cut);
-      buffer = buffer.slice(cut + 2);
-      for (const rawLine of block.split("\n")) {
-        if (!rawLine.startsWith("data:")) continue;
-        const payload = rawLine.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        const chunk = JSON.parse(payload);
-        if (chunk.type === "text-delta") result.text += chunk.delta;
-        else if (chunk.type === "tool-input-available")
-          result.toolCalls.push(chunk.toolName);
-        else if (chunk.type === "tool-output-error") result.toolErrors += 1;
-        else if (chunk.type === "error")
-          throw new Error(`stream error: ${chunk.errorText}`);
-      }
-    }
-  }
-  return result;
-}
-
+/** Runs one turn and reads the assembled assistant message. The reply text is
+ * needed for the next turn's history; the tool names are only for the console
+ * log. */
 async function runTurn(
   shopperId: string,
   model: string,
   chatId: string,
   messages: UIMessage[],
 ): Promise<TurnResult> {
-  const response = await fetch(`${baseUrl}/api/chat`, {
-    method: "POST",
+  const stream = await transport.sendMessages({
+    trigger: "submit-message",
+    chatId,
+    messageId: undefined,
+    abortSignal: undefined,
+    messages,
     headers: {
-      "content-type": "application/json",
       "x-demo-shopper": shopperId,
       "x-demo-model": model,
+      "x-demo-run": seedRun,
     },
-    body: JSON.stringify({ id: chatId, messages }),
   });
-  if (!response.ok || !response.body) {
-    throw new Error(`${response.status} ${await response.text()}`);
+
+  let streamError: Error | null = null;
+  let assistant: UIMessage | undefined;
+  for await (const message of readUIMessageStream({
+    stream,
+    onError: (error) => {
+      streamError = error instanceof Error ? error : new Error(String(error));
+    },
+    terminateOnError: true,
+  })) {
+    assistant = message;
   }
-  return readStream(response.body);
+  if (streamError) throw streamError;
+
+  const parts = assistant?.parts ?? [];
+  return {
+    text: parts
+      .filter(isTextUIPart)
+      .map((part) => part.text)
+      .join(""),
+    toolCalls: parts.filter(isToolUIPart).map(getToolName),
+    toolErrors: parts.filter(
+      (part) => isToolUIPart(part) && part.state === "output-error",
+    ).length,
+  };
 }
 
 interface Plan {
@@ -243,8 +247,9 @@ await Promise.all(
         await runConversation(plan);
       } catch (error) {
         failures += 1;
+        const message = error instanceof Error ? error.message : String(error);
         console.error(
-          `  ✗ ${plan.username} ${plan.scenarioKey}: ${(error as Error).message.slice(0, 200)}`,
+          `  ✗ ${plan.username} ${plan.scenarioKey}: ${message.slice(0, 200)}`,
         );
       }
       await sleep(rng() * 1500);

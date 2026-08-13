@@ -8,19 +8,23 @@ export interface Shopper {
   email: string;
 }
 
+// Who the browser is signed in as. Server, edge, and client Sentry configs all
+// start their scope here, so a page render carries a user even where no
+// request handler calls Sentry.setUser.
+export const DEMO_USER: Shopper = {
+  id: "cust_01",
+  username: "ada",
+  email: "ada@example.com",
+};
+
 export const SHOPPERS: Shopper[] = [
-  { id: "cust_01", username: "ada", email: "ada@example.com" },
+  DEMO_USER,
   { id: "cust_02", username: "grace", email: "grace@example.com" },
   { id: "cust_03", username: "alan", email: "alan@example.com" },
   { id: "cust_04", username: "katherine", email: "katherine@example.com" },
   { id: "cust_05", username: "radia", email: "radia@example.com" },
   { id: "cust_06", username: "shafi", email: "shafi@example.com" },
 ];
-
-// Who the browser is signed in as. Server, edge, and client Sentry configs all
-// start their scope here, so a page render carries a user even where no
-// request handler calls Sentry.setUser.
-export const DEMO_USER = SHOPPERS[0]!;
 
 /** Falls back to the signed-in shopper, so an unknown id can never widen
  * access beyond the six fictional customers. */

@@ -1,0 +1,2 @@
+# Vendored lint tooling — keep it byte-identical to its source so updates stay reviewable.
+tools/oxlint/anti-slop

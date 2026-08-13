@@ -1,8 +1,13 @@
 import * as Sentry from "@sentry/node";
-import { callSlackApi } from "eve/channels/slack";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { conversationStash } from "../lib/conversation";
+import {
+  imageAccessory,
+  postCard,
+  type SlackBlock,
+  type SlackButtonElement,
+} from "../lib/slack-blocks";
 
 const choiceSchema = z.object({
   storeId: z.string().min(1).describe("storeId from find_restaurants, copied exactly"),
@@ -15,9 +20,18 @@ const choiceSchema = z.object({
   imageUrl: z.string().nullish().describe("imageUrl from find_restaurants; omit when it has none"),
 });
 
-type SlackBlock = Record<string, unknown>;
-
 const postedCards = new Map<string, string>();
+
+// Alias, not interface: only aliases get the implicit index signature that
+// Sentry.logger's Record<string, unknown> attribute bag requires.
+type RestaurantOptionLog = {
+  "meal.craving": string;
+  "meal.option_index": number;
+  "meal.store": string;
+  "meal.store_id": string;
+  "gen_ai.conversation.id"?: string;
+  "user.id"?: string;
+};
 
 export default defineTool({
   description:
@@ -52,26 +66,17 @@ export default defineTool({
         type: "context",
         elements: [{ type: "mrkdwn", text: "Pick a spot and I'll build three options from its menu" }],
       },
-      ...choices.map((choice, index) => {
-        const section: SlackBlock = {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `*${index + 1}. ${choice.name}*\n${choice.detail ?? ""}\n${choice.blurb}`.slice(0, 3000),
-          },
-        };
-        if (choice.imageUrl && choice.imageUrl.length <= 3000) {
-          section.accessory = {
-            type: "image",
-            image_url: choice.imageUrl,
-            alt_text: choice.name.slice(0, 2000),
-          };
-        }
-        return section;
-      }),
+      ...choices.map((choice, index): SlackBlock => ({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*${index + 1}. ${choice.name}*\n${choice.detail ?? ""}\n${choice.blurb}`.slice(0, 3000),
+        },
+        accessory: imageAccessory(choice.imageUrl, choice.name),
+      })),
       {
         type: "actions",
-        elements: choices.map((choice, index) => ({
+        elements: choices.map((choice, index): SlackButtonElement => ({
           type: "button",
           action_id: `pick_restaurant_${index + 1}`,
           value: `${choice.name} (storeId ${choice.storeId})`.slice(0, 2000),
@@ -80,34 +85,27 @@ export default defineTool({
       },
     ];
 
-    const response = await callSlackApi({
-      botToken: undefined,
-      operation: "chat.postMessage",
-      body: {
-        channel: channelId,
-        thread_ts: threadTs,
-        blocks,
-        text: `Where to order — ${craving}: ${choices.map((c, i) => `${i + 1}. ${c.name}`).join(" · ")}`,
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`chat.postMessage failed: ${response.error ?? "unknown_error"}`);
-    }
-    const messageTs = (response.ts as string | undefined) ?? null;
-    postedCards.set(dedupeKey, messageTs ?? "posted");
+    const posted = await postCard(
+      channelId,
+      threadTs,
+      blocks,
+      `Where to order — ${craving}: ${choices.map((c, i) => `${i + 1}. ${c.name}`).join(" · ")}`,
+    );
+    postedCards.set(dedupeKey, posted.ts ?? "posted");
 
     const conv = conversationStash();
     for (const [index, choice] of choices.entries()) {
-      Sentry.logger.info("meal.restaurant.presented", {
+      const attributes: RestaurantOptionLog = {
         "meal.craving": craving,
         "meal.option_index": index + 1,
         "meal.store": choice.name,
         "meal.store_id": choice.storeId,
-        "conversation.id": threadTs,
-        ...(conv?.userId ? { "user.id": conv.userId } : {}),
-      });
+      };
+      if (conv?.threadTs) attributes["gen_ai.conversation.id"] = conv.threadTs;
+      if (conv?.userId) attributes["user.id"] = conv.userId;
+      Sentry.logger.info("meal.restaurant.presented", attributes);
     }
 
-    return { posted: true, messageTs };
+    return { posted: true, messageTs: posted.ts };
   },
 });

@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { slackChannel } from "eve/channels/slack";
 import { CART_LINK_RE } from "../lib/dd";
 
@@ -6,9 +7,9 @@ import { CART_LINK_RE } from "../lib/dd";
 export default slackChannel({
   threadContext: { since: "last-agent-reply" },
   // Mentions and DMs dispatch anonymously ({auth: null}) instead of through
-  // eve's defaults, which attach a Slack auth context — a live 2026-08-08
-  // mention was dropped without a turn or a log line on that default path,
-  // while every {auth: null} dispatch has worked.
+  // eve's defaults, which attach a Slack auth context: mentions on that
+  // default path were dropped without a turn or a log line, while every
+  // {auth: null} dispatch runs.
   async onAppMention(_ctx, message) {
     return message.author?.isBot ? null : { auth: null };
   },
@@ -42,6 +43,12 @@ export default slackChannel({
         `<@${action.user.id}> clicked ${action.label ?? "a pick button"} on the options card — their pick is ${pick}.`,
         { auth: null },
       )
-      .catch((error) => console.error("[slack] pick dispatch failed", error));
+      .catch((error) => {
+        // The click was already acked, so a failure here is silent to the
+        // person: nothing else would ever report it. The console integration
+        // only makes a breadcrumb, hence the explicit capture.
+        Sentry.captureException(error);
+        console.error("[slack] pick dispatch failed", error);
+      });
   },
 });

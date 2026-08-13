@@ -1,50 +1,86 @@
 import * as Sentry from "@sentry/node";
 import { callSlackApi } from "eve/channels/slack";
 import { defineInstrumentation, isChannel } from "eve/instrumentation";
+import { z } from "zod";
 import slack from "./channels/slack";
-import { CONVERSATION_STASH, conversationStash } from "./lib/conversation";
+import { AGENT_NAME } from "./lib/agent-name";
+import { conversationStash, setConversationStash } from "./lib/conversation";
 
-const slackSessionIdentity = new Map<
-  string,
-  { channelId?: string; threadTs?: string; userId?: string }
->();
+interface SlackIdentity {
+  channelId?: string;
+  threadTs?: string;
+  userId?: string;
+}
+
+const slackSessionIdentity = new Map<string, SlackIdentity>();
 
 // Env-first configuration, so the same file works from local dev to a real
 // deployment without edits. Absent vars fall back to demo-friendly defaults.
+// Same spellings the other two demos accept, so one documented value turns a
+// direction off in every app.
+const DISABLED_FLAG_VALUES = new Set(["false", "0", "no", "off"]);
+
 function envFlag(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  return raw !== "false" && raw !== "0";
+  if (raw === undefined || raw.trim() === "") return fallback;
+  return !DISABLED_FLAG_VALUES.has(raw.trim().toLowerCase());
 }
 
 function envRate(name: string, fallback: number): number {
-  const parsed = Number(process.env[name]);
+  const raw = process.env[name];
+  // `Number("")` is 0, so an empty assignment would otherwise read as "sample
+  // nothing" and silently switch tracing off.
+  if (raw === undefined || raw === "") return fallback;
+  const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
 }
 
-const recordInputs = envFlag("SENTRY_RECORD_INPUTS", true);
-const recordOutputs = envFlag("SENTRY_RECORD_OUTPUTS", true);
+const recordInputs = envFlag("SENTRY_AI_RECORD_INPUTS", true);
+const recordOutputs = envFlag("SENTRY_AI_RECORD_OUTPUTS", true);
+
+interface SlackUserProfile {
+  username?: string;
+  email?: string;
+}
 
 // Slack user id → profile for Sentry.setUser enrichment. A `null` entry is
 // the failure cache: a missing users:read scope fails once per user per
 // process, not once per step.
-const slackUserProfiles = new Map<
-  string,
-  { username?: string; email?: string } | null
->();
+const slackUserProfiles = new Map<string, SlackUserProfile | null>();
 
 // Isolation scopes whose users.info call has not come back yet.
 const slackProfileWaiters = new Map<string, Set<Sentry.Scope>>();
 
+const usersInfoSchema = z.looseObject({
+  ok: z.boolean(),
+  user: z
+    .looseObject({
+      name: z.string().optional(),
+      profile: z
+        .looseObject({
+          display_name: z.string().optional(),
+          real_name: z.string().optional(),
+          email: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+
+interface SlackUserContext {
+  id: string;
+  username?: string;
+  email?: string;
+}
+
 function applySlackUser(scope: Sentry.Scope, userId: string): void {
   const profile = slackUserProfiles.get(userId);
-  scope.setUser({
-    id: userId,
-    // `username` is what the Logs pipeline emits as user.name and what the
-    // Conversations/Issues User column prefers over the raw id.
-    ...(profile?.username ? { username: profile.username } : {}),
-    ...(profile?.email ? { email: profile.email } : {}),
-  });
+  const user: SlackUserContext = { id: userId };
+  // `username` is what the Logs pipeline emits as user.name and what the
+  // Conversations/Issues User column prefers over the raw id.
+  if (profile?.username) user.username = profile.username;
+  if (profile?.email) user.email = profile.email;
+  scope.setUser(user);
 }
 
 // The step hook is synchronous, so users.info cannot be awaited before the
@@ -71,23 +107,20 @@ function trackSlackProfile(userId: string, scope: Sentry.Scope): void {
     body: { user: userId },
   })
     .then((response) => {
-      const user = (
-        response as {
-          ok: boolean;
-          user?: {
-            name?: string;
-            profile?: { display_name?: string; real_name?: string; email?: string };
-          };
-        }
-      ).user;
-      if (!response.ok || !user) return;
+      const parsed = usersInfoSchema.safeParse(response);
+      if (!parsed.success || !parsed.data.ok) return;
+      const user = parsed.data.user;
+      if (!user) return;
       slackUserProfiles.set(userId, {
         username: user.profile?.display_name || user.profile?.real_name || user.name,
         email: user.profile?.email,
       });
     })
-    .catch(() => {
-      // id-only user context still applies
+    .catch((error) => {
+      // Non-fatal: id-only user context still applies. Captured because a
+      // missing users:read scope is otherwise invisible — every user would
+      // just keep showing up under a raw Slack id.
+      Sentry.captureException(error);
     })
     .finally(() => {
       if (!slackUserProfiles.has(userId)) slackUserProfiles.set(userId, null);
@@ -99,9 +132,8 @@ function trackSlackProfile(userId: string, scope: Sentry.Scope): void {
 }
 
 export default defineInstrumentation({
-  // Names the agent in Sentry's AI views. Without it eve falls back to the
-  // runtime agent name, which is the package name (doordash-agent).
-  functionId: "mealbot",
+  // Names the agent in Sentry's AI views.
+  functionId: AGENT_NAME,
   // Runs at server startup, before any agent code. Sentry.init registers a
   // global OpenTelemetry tracer provider, so eve's AI SDK telemetry spans
   // (ai.eve.turn > ai.streamText > ai.toolCall) flow straight into Sentry.
@@ -109,6 +141,9 @@ export default defineInstrumentation({
     Sentry.init({
       dsn: process.env.SENTRY_DSN,
       environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? "development",
+      // Without a release Sentry cannot mark regressions, attribute an issue
+      // to a deploy, or resolve suspect commits.
+      release: process.env.SENTRY_RELEASE ?? process.env.VERCEL_GIT_COMMIT_SHA,
       tracesSampleRate: envRate("SENTRY_TRACES_SAMPLE_RATE", 1.0),
       // One switch for gen_ai content capture — the integration reads these
       // as its defaults, so no per-integration recordInputs/recordOutputs.
@@ -116,20 +151,20 @@ export default defineInstrumentation({
       // Default segment export, which sends a turn's spans while the request
       // is still open — required on Vercel, where the function freezes as soon
       // as it responds and anything still buffered is lost. This only works
-      // because eve 0.32 marks each step's restored context remote
+      // because eve >= 0.32 marks each step's restored context remote
       // (vercel/eve#1855), so every step forms its own exportable segment.
       //
       // A step's spans can still be created outside the isolation scope that
       // setConversationId below writes to, so the conversation id is stamped
-      // here from the cross-context stash. Only AI-shaped spans get stamped —
+      // here from the cross-context stash. Only gen_ai spans get stamped —
       // Conversations aggregates by this attribute.
       beforeSendSpan: (span) => {
         const conv = conversationStash();
         if (!conv?.threadTs) return span;
-        const aiShaped =
+        const isGenAiSpan =
           span.op?.startsWith("gen_ai") ||
           /^(chat|generate_content|invoke_agent|execute_tool|embed) /.test(span.description ?? "");
-        if (!aiShaped) return span;
+        if (!isGenAiSpan) return span;
         span.data["gen_ai.conversation.id"] ??= conv.threadTs;
         if (conv.userId) span.data["user.id"] ??= conv.userId;
         return span;
@@ -140,18 +175,25 @@ export default defineInstrumentation({
       // add the business layer spans can't carry.
       enableLogs: envFlag("SENTRY_ENABLE_LOGS", true),
       integrations: [
-        // Required for the AI Agents views: without it every model and tool
-        // span still arrives, but as op:default instead of gen_ai.*, so it is
-        // invisible to Sentry's AI product, the spend dashboard, and the
-        // detectors (verified live 2026-08-11 17:32 to 2026-08-12 23:34).
+        // Already a default integration; listed so the AI wiring is visible in
+        // one place. It works on two fronts:
         //
-        // It also emits its own spans off the `ai:telemetry` diagnostics
-        // channel, so each model call is described twice in the waterfall:
-        // once here (origin auto.vercelai.channel) and once by eve's
-        // @ai-sdk/otel span (origin manual, left at op:default). Spend is
-        // still counted once, because every gen_ai query matches only the
-        // first. force: true because eve's nitro build bundles `ai`, which
-        // defeats Sentry's module detection.
+        // 1. It subscribes to `ai` 7's `ai:telemetry` diagnostics channel and
+        //    opens its own gen_ai.* spans (origin auto.vercelai.channel).
+        // 2. It installs span processors that map eve's @ai-sdk/otel spans
+        //    (ai.streamText, ai.toolCall, …) onto the same gen_ai.* ops.
+        //    Without that mapping those spans arrive as op:default, invisible
+        //    to Insights > AI Agents, the spend dashboard and the detectors.
+        //
+        // Front 2 otherwise waits for one of two triggers: the Modules
+        // integration reading `ai` out of the dependencies of whatever
+        // package.json sits in process.cwd(), or a patch of the `ai` module
+        // that is capped at `<7` and so never fires on ai 7. `force: true`
+        // attaches it outright, so the mapping does not depend on where the
+        // built server happens to be started from.
+        //
+        // Both fronts running is why each model and tool call is described
+        // twice in the waterfall, one span per origin.
         Sentry.vercelAIIntegration({ force: true }),
       ],
     });
@@ -171,42 +213,47 @@ export default defineInstrumentation({
       // eve's internal workflow queue with a different channel kind, so
       // their identity is cached per session — otherwise every span after
       // step 1 loses its conversation id and Explore > Conversations shows
-      // only the beginning of each turn (observed live 2026-08-08).
-      // In-process cache; fine for the single-process demo server.
-      let slack_: { channelId?: string; threadTs?: string; userId?: string } | undefined;
+      // only the beginning of each turn. In-process cache; fine for the
+      // single-process demo server.
+      let identity: SlackIdentity | undefined;
       if (isChannel(input.channel, slack)) {
         const { channelId, threadTs, triggeringUserId } = input.channel.metadata;
-        slack_ = {
+        identity = {
           channelId: channelId ?? undefined,
           threadTs: threadTs ?? undefined,
           userId: triggeringUserId ?? undefined,
         };
-        slackSessionIdentity.set(input.session.id, slack_);
+        slackSessionIdentity.set(input.session.id, identity);
       } else {
-        slack_ = slackSessionIdentity.get(input.session.id);
+        identity = slackSessionIdentity.get(input.session.id);
       }
-      if (!slack_) return undefined;
+      if (!identity) return undefined;
       // This callback runs on the same execution path as the step's model
       // call, so isolation-scope state set here lands on the AI spans that
       // follow. The Slack thread is the conversation: setConversationId stamps
       // gen_ai.conversation.id on every AI span (grouping the thread in
       // Explore > Conversations) and setUser fills that view's User column.
-      Sentry.setConversationId(slack_.threadTs ?? null);
-      // Handoff for tracedExecute, which may run in eve's replay context
-      // (separate module instance) where this scope isn't reachable.
-      (globalThis as Record<symbol, unknown>)[CONVERSATION_STASH] = {
-        threadTs: slack_.threadTs ?? null,
-        userId: slack_.userId ?? null,
-      };
-      if (slack_.userId) {
-        trackSlackProfile(slack_.userId, Sentry.getIsolationScope());
+      // The matching tag puts the same id on error events, which carry tags
+      // rather than span attributes.
+      Sentry.setConversationId(identity.threadTs ?? null);
+      if (identity.threadTs) {
+        Sentry.getIsolationScope().setTag("gen_ai.conversation.id", identity.threadTs);
+      }
+      // Handoff for beforeSendSpan above, which may run in eve's replay
+      // context (separate module instance) where this scope isn't reachable.
+      setConversationStash({
+        threadTs: identity.threadTs ?? null,
+        userId: identity.userId ?? null,
+      });
+      if (identity.userId) {
+        trackSlackProfile(identity.userId, Sentry.getIsolationScope());
       }
       return {
         runtimeContext: {
           // Lands on every AI span namespaced by eve + Sentry as
           // vercel.ai.settings.context.slack.channel_id / .slack.user_id.
-          "slack.channel_id": slack_.channelId ?? "",
-          "slack.user_id": slack_.userId ?? "",
+          "slack.channel_id": identity.channelId ?? "",
+          "slack.user_id": identity.userId ?? "",
         },
       };
     },
