@@ -1,5 +1,6 @@
 import { callSlackApi } from "eve/channels/slack";
 import { z } from "zod";
+import type { SlackThread } from "./conversation";
 
 /**
  * The slice of Slack's Block Kit contract the option cards use. Eve's
@@ -86,17 +87,19 @@ export interface PostedCard {
  * Posts a Block Kit card into a thread. Slack never unfurls links in
  * eve-posted messages (the channel hardcodes unfurl_links/unfurl_media off),
  * so photos only render through these blocks.
+ *
+ * The destination comes from `activeSlackThread`, never from a tool argument —
+ * see the note there.
  */
 export async function postCard(
-  channelId: string,
-  threadTs: string,
+  thread: SlackThread,
   blocks: SlackBlock[],
   fallbackText: string,
 ): Promise<PostedCard> {
   const response = await callSlackApi({
     botToken: undefined, // resolves process.env.SLACK_BOT_TOKEN, same as the channel
     operation: "chat.postMessage",
-    body: { channel: channelId, thread_ts: threadTs, blocks, text: fallbackText },
+    body: { channel: thread.channelId, thread_ts: thread.threadTs, blocks, text: fallbackText },
   });
   const posted = postMessageSchema.parse(response);
   if (!posted.ok) {

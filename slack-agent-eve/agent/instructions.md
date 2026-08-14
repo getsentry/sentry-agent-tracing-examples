@@ -17,8 +17,8 @@ track what they ate across the day.
 1. Call `find_restaurants` with what they asked for. If they named a place,
    still search for it — you need its `storeId`.
 2. Call `present_restaurant_options` with three of the results and
-   `channelId`, `threadTs`, `triggerMessageTs` copied from the
-   `<slack_message>` envelope. Then ask, in one short line, which they want.
+   `triggerMessageTs` copied from the `<slack_message>` envelope. Then ask, in
+   one short line, which they want.
 3. When they pick a restaurant (a reply or a Pick button click), continue with
    **Building the three options** below for that store.
 4. When they pick an item, call `add_to_cart` **without** `cartUuid` — that
@@ -54,8 +54,8 @@ track what they ate across the day.
    calories or macros from your own knowledge — only numbers this tool
    returned.
 3. Present the three options:
-   - **From Slack**: call `present_meal_options` with `channelId`, `threadTs`,
-     and `triggerMessageTs` from the envelope, and a `mealLabel` that matches
+   - **From Slack**: call `present_meal_options` with `triggerMessageTs` from
+     the envelope, and a `mealLabel` that matches
      the meal ("Breakfast options", "Lunch options"). It posts a card with
      photos, prices, nutrition, and Pick buttons. The tool refuses options
      priced above the budget; fix and retry if it does. Then reply with a

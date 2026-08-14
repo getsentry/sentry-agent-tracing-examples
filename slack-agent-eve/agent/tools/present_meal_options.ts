@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/node";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { activeConversation } from "../lib/conversation";
+import { activeConversation, activeSlackThread } from "../lib/conversation";
 import {
   imageAccessory,
   postCard,
@@ -47,10 +47,8 @@ type MealOptionLog = {
 
 export default defineTool({
   description:
-    "Post the meal options into the Slack thread as a rich card with photo thumbnails, prices, and nutrition. Always use this instead of listing the options in reply text when the request came from Slack. Copy channelId and threadTs from the <slack_message> envelope of the triggering message.",
+    "Post the meal options into the Slack thread as a rich card with photo thumbnails, prices, and nutrition. Always use this instead of listing the options in reply text when the request came from Slack. The card goes to the thread that triggered this turn; there is no way to send it anywhere else.",
   inputSchema: z.object({
-    channelId: z.string().min(1).describe("channel_id from the <slack_message> envelope"),
-    threadTs: z.string().min(1).describe("thread_ts from the <slack_message> envelope"),
     triggerMessageTs: z
       .string()
       .min(1)
@@ -63,15 +61,15 @@ export default defineTool({
     budgetUsd: z.number().describe("budgetUsd from resolve_group_cart, or the person's own budget"),
     options: z.array(optionSchema).min(2).max(4),
   }),
-  async execute({
-    channelId,
-    threadTs,
-    triggerMessageTs,
-    storeName,
-    mealLabel: rawMealLabel,
-    budgetUsd,
-    options,
-  }) {
+  async execute({ triggerMessageTs, storeName, mealLabel: rawMealLabel, budgetUsd, options }) {
+    const thread = activeSlackThread();
+    if (thread === undefined) {
+      return {
+        posted: false,
+        note: "This turn did not come from a Slack thread, so there is nowhere to post a card. List the options in your reply text instead.",
+      };
+    }
+
     const mealLabel = rawMealLabel?.trim() || "Options";
     const overBudget = options.filter((option) => option.priceUsd > budgetUsd);
     if (overBudget.length > 0) {
@@ -84,7 +82,7 @@ export default defineTool({
       );
     }
 
-    const dedupeKey = `${channelId}:${triggerMessageTs}`;
+    const dedupeKey = `${thread.channelId}:${triggerMessageTs}`;
     const alreadyPostedTs = postedCards.get(dedupeKey);
     if (alreadyPostedTs) {
       return {
@@ -140,19 +138,13 @@ export default defineTool({
       .map((o, i) => `${i + 1}. ${o.lane}: ${o.title} — $${o.priceUsd.toFixed(2)}`)
       .join(" · ");
 
-    const posted = await postCard(
-      channelId,
-      threadTs,
-      blocks,
-      `${mealLabel} — ${storeName}: ${fallback}`,
-    );
+    const posted = await postCard(thread, blocks, `${mealLabel} — ${storeName}: ${fallback}`);
     postedCards.set(dedupeKey, posted.ts ?? "posted");
 
     // One domain event per offered option — lets dashboards compare what
     // was offered against what got picked (meal.pick.added), by lane,
     // price, and nutrition. The conversation id comes from the turn's own
-    // trace, not from the model's threadTs argument, so it always matches
-    // the spans.
+    // trace, so it always matches the spans.
     const conv = activeConversation();
     for (const [index, option] of options.entries()) {
       const attributes: MealOptionLog = {

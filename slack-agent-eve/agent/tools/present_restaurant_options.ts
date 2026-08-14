@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/node";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { activeConversation } from "../lib/conversation";
+import { activeConversation, activeSlackThread } from "../lib/conversation";
 import {
   imageAccessory,
   postCard,
@@ -35,10 +35,8 @@ type RestaurantOptionLog = {
 
 export default defineTool({
   description:
-    "Post three restaurant choices into the Slack thread as a card with photo thumbnails and Pick buttons. Use this as the first step of a personal order, before any menu lookup. Copy channelId, threadTs, and triggerMessageTs from the <slack_message> envelope.",
+    "Post three restaurant choices into the Slack thread as a card with photo thumbnails and Pick buttons. Use this as the first step of a personal order, before any menu lookup. The card goes to the thread that triggered this turn; there is no way to send it anywhere else.",
   inputSchema: z.object({
-    channelId: z.string().min(1).describe("channel_id from the <slack_message> envelope"),
-    threadTs: z.string().min(1).describe("thread_ts from the <slack_message> envelope"),
     triggerMessageTs: z
       .string()
       .min(1)
@@ -46,8 +44,16 @@ export default defineTool({
     craving: z.string().min(1).describe('What they asked for, echoed back — e.g. "sushi"'),
     choices: z.array(choiceSchema).min(2).max(4),
   }),
-  async execute({ channelId, threadTs, triggerMessageTs, craving, choices }) {
-    const dedupeKey = `${channelId}:${triggerMessageTs}`;
+  async execute({ triggerMessageTs, craving, choices }) {
+    const thread = activeSlackThread();
+    if (thread === undefined) {
+      return {
+        posted: false,
+        note: "This turn did not come from a Slack thread, so there is nowhere to post a card. List the choices in your reply text instead.",
+      };
+    }
+
+    const dedupeKey = `${thread.channelId}:${triggerMessageTs}`;
     const alreadyPostedTs = postedCards.get(dedupeKey);
     if (alreadyPostedTs) {
       return {
@@ -86,8 +92,7 @@ export default defineTool({
     ];
 
     const posted = await postCard(
-      channelId,
-      threadTs,
+      thread,
       blocks,
       `Where to order — ${craving}: ${choices.map((c, i) => `${i + 1}. ${c.name}`).join(" · ")}`,
     );

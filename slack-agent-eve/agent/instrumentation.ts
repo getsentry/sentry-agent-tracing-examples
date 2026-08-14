@@ -290,6 +290,7 @@ export default defineInstrumentation({
       } else {
         identity = slackSessionIdentity.get(input.session.id);
       }
+      const channelId = identity?.channelId;
       const threadTs = identity?.threadTs;
       const userId = identity?.userId;
       // This callback runs on the same execution path as the step's model
@@ -313,8 +314,11 @@ export default defineInstrumentation({
       // context (separate module instance) where this scope isn't reachable.
       // A turn with no thread is recorded too — that record is what lets
       // beforeSendSpan strip a conversation id stamped before this ran.
+      //
+      // The channel id rides along for a second reader: it is the only
+      // trusted destination the card tools have (activeSlackThread).
       const traceId = activeTraceId();
-      if (traceId !== undefined) rememberConversation(traceId, { threadTs, userId });
+      if (traceId !== undefined) rememberConversation(traceId, { channelId, threadTs, userId });
       if (identity === undefined) return undefined;
       return {
         runtimeContext: {

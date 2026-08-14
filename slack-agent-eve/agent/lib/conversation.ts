@@ -24,8 +24,15 @@ import * as Sentry from "@sentry/node";
 // trace is unknown", and strip a `gen_ai.conversation.id` an earlier turn left
 // on the isolation scope the SDK stamps from.
 export interface Conversation {
+  channelId?: string;
   threadTs?: string;
   userId?: string;
+}
+
+/** Where a card may be posted. Only `activeSlackThread` can supply one. */
+export interface SlackThread {
+  channelId: string;
+  threadTs: string;
 }
 
 // Nothing marks a turn finished from in here — its spans are still being
@@ -74,4 +81,21 @@ export function conversationForTrace(traceId: string): Conversation | undefined 
 export function activeConversation(): Conversation | undefined {
   const traceId = activeTraceId();
   return traceId === undefined ? undefined : conversationForTrace(traceId);
+}
+
+/**
+ * Slack thread that started the turn in flight, or undefined when the turn
+ * came from somewhere else (the local TUI, `eve invoke`).
+ *
+ * This is the only trusted destination for an outbound message. A tool
+ * argument is model output: the model reads the channel and thread out of the
+ * `<slack_message>` envelope, so anything a user writes in that thread can ask
+ * it to write a different pair, and the bot token would post wherever it can
+ * reach. Server-side, `step.started` knows the real pair from the inbound
+ * event, so tools never have to ask the model for it.
+ */
+export function activeSlackThread(): SlackThread | undefined {
+  const { channelId, threadTs } = activeConversation() ?? {};
+  if (channelId === undefined || threadTs === undefined) return undefined;
+  return { channelId, threadTs };
 }
