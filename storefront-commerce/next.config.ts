@@ -15,6 +15,16 @@ const nextConfig: NextConfig = {
   images: {
     formats: ["image/avif", "image/webp"],
   },
+  // The browser runs Sentry.init too, and Next inlines only NEXT_PUBLIC_*
+  // names there. Mirroring the pair keeps one operator-facing setting for all
+  // three runtimes; the values are booleans about span content, so the mirror
+  // publishes nothing the recorded spans do not already show.
+  env: {
+    NEXT_PUBLIC_SENTRY_AI_RECORD_INPUTS:
+      process.env.SENTRY_AI_RECORD_INPUTS ?? "true",
+    NEXT_PUBLIC_SENTRY_AI_RECORD_OUTPUTS:
+      process.env.SENTRY_AI_RECORD_OUTPUTS ?? "true",
+  },
 };
 
 export default withSentryConfig(nextConfig, {
@@ -23,6 +33,10 @@ export default withSentryConfig(nextConfig, {
   authToken: process.env.SENTRY_AUTH_TOKEN,
   silent: !process.env.CI,
   widenClientFileUpload: true,
+  // Routes browser events through the app's own origin, so a reader running
+  // the demo behind an ad blocker still gets client errors, replays, and the
+  // browser half of each trace.
+  tunnelRoute: true,
   // Source map upload only happens when SENTRY_AUTH_TOKEN is set, so builds
   // stay green in environments without Sentry credentials.
   sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },

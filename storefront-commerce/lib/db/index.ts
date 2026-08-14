@@ -8,6 +8,7 @@ import type {
   Order,
   Page,
   Product,
+  StoredCart,
 } from "lib/commerce/types";
 import {
   COLLECTIONS,
@@ -17,6 +18,7 @@ import {
   PAGES,
   PAYMENTS,
   PRODUCTS,
+  type MenuHandle,
   type Payment,
   type ProductRow,
 } from "./data";
@@ -24,7 +26,7 @@ import {
 /**
  * Runs a fake query with realistic jittered latency inside a Sentry span
  * shaped like a real database call: `op: db.query`, a parameterized SQL
- * statement as the span name, and a `db.system` identifier — the three things
+ * statement as the span name, and the current `db.*` attributes — what
  * Sentry's Queries insights need to parse and aggregate the span.
  */
 function query<T>(sql: string, operation: string, run: () => T): Promise<T> {
@@ -33,8 +35,9 @@ function query<T>(sql: string, operation: string, run: () => T): Promise<T> {
       name: sql,
       op: "db.query",
       attributes: {
-        "db.system": "sqlite",
-        "db.operation": operation,
+        "db.system.name": "sqlite",
+        "db.operation.name": operation,
+        "db.query.text": sql,
       },
     },
     async () => {
@@ -46,10 +49,12 @@ function query<T>(sql: string, operation: string, run: () => T): Promise<T> {
   );
 }
 
+// Drops the columns a row carries only so the fake queries can filter and
+// sort; they are not part of the product the storefront renders.
 const toProduct = ({
-  collections,
-  bestSellingRank,
-  createdAt,
+  collections: _collections,
+  bestSellingRank: _bestSellingRank,
+  createdAt: _createdAt,
   ...product
 }: ProductRow): Product => product;
 
@@ -162,11 +167,11 @@ export function selectCollection(
   );
 }
 
-export function selectMenu(handle: string): Promise<Menu[]> {
+export function selectMenu(handle: MenuHandle): Promise<Menu[]> {
   return query(
     "SELECT title, path FROM menu_items WHERE menu_handle = ?",
     "SELECT",
-    () => MENUS[handle] ?? [],
+    () => MENUS[handle],
   );
 }
 
@@ -197,14 +202,21 @@ export function selectOrder(
   );
 }
 
-// The non-null cast is the demo's planted bug: orders that predate the
-// payments launch (see PAYMENTS in data.ts) have no row here, so callers
-// that dereference the result crash on legacy orders.
+// The demo's planted bug: orders that predate the payments launch (see
+// PAYMENTS in data.ts) have no row here, so a refund of a legacy order fails.
 export function selectPayment(orderId: string): Promise<Payment> {
   return query(
     "SELECT * FROM payments WHERE order_id = ? LIMIT 1",
     "SELECT",
-    () => PAYMENTS.find((p) => p.orderId === orderId) as Payment,
+    () => {
+      const payment = PAYMENTS.find((p) => p.orderId === orderId);
+      if (!payment) {
+        throw new Error(
+          `Order ${orderId} predates the payments launch and has no charge to refund`,
+        );
+      }
+      return payment;
+    },
   );
 }
 
@@ -235,7 +247,7 @@ function findVariant(merchandiseId: string) {
   return undefined;
 }
 
-function computeCart(id: string, lines: CartItem[]): Cart {
+function computeCart(id: string, lines: CartItem[]): StoredCart {
   const subtotal = lines.reduce(
     (sum, line) => sum + parseFloat(line.cost.totalAmount.amount),
     0,
@@ -299,7 +311,7 @@ function buildLine(
   };
 }
 
-export function insertCart(): Promise<Cart> {
+export function insertCart(): Promise<StoredCart> {
   return query("INSERT INTO carts (id) VALUES (?)", "INSERT", () => {
     const id = crypto.randomUUID();
     carts.set(id, []);

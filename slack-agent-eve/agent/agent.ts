@@ -8,7 +8,7 @@ const openrouter = createOpenRouter({
 export default defineAgent({
   // A provider instance (rather than a model id string) makes eve talk to
   // OpenRouter directly, bypassing the Vercel AI Gateway — no AI_GATEWAY_API_KEY.
-  model: openrouter.chat("anthropic/claude-sonnet-4.5"),
+  model: openrouter.chat("anthropic/claude-sonnet-5"),
   // Eve resolves context windows from the AI Gateway catalog, which it cannot
   // do for external models; this keeps its compaction thresholds sane.
   modelContextWindowTokens: 200_000,

@@ -12,9 +12,16 @@ export function Gallery({
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const imageIndex = searchParams.has("image")
-    ? parseInt(searchParams.get("image")!)
-    : 0;
+  // `?image=` is whatever the URL says, so a hand-edited or stale link can name
+  // a non-number or an index this product does not have; both fall back to the
+  // first image rather than leaving the gallery blank.
+  const requestedIndex = Number.parseInt(searchParams.get("image") ?? "", 10);
+  const imageIndex =
+    Number.isInteger(requestedIndex) &&
+    requestedIndex >= 0 &&
+    requestedIndex < images.length
+      ? requestedIndex
+      : 0;
 
   const updateImage = (index: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -22,6 +29,7 @@ export function Gallery({
     router.replace(`?${params.toString()}`, { scroll: false });
   };
 
+  const currentImage = images[imageIndex];
   const nextImageIndex = imageIndex + 1 < images.length ? imageIndex + 1 : 0;
   const previousImageIndex =
     imageIndex === 0 ? images.length - 1 : imageIndex - 1;
@@ -32,13 +40,13 @@ export function Gallery({
   return (
     <form>
       <div className="relative aspect-square h-full max-h-[550px] w-full overflow-hidden">
-        {images[imageIndex] && (
+        {currentImage && (
           <Image
             className="h-full w-full object-cover"
             fill
             sizes="(min-width: 1024px) 66vw, 100vw"
-            alt={images[imageIndex]?.altText as string}
-            src={images[imageIndex]?.src as string}
+            alt={currentImage.altText}
+            src={currentImage.src}
             priority={true}
           />
         )}

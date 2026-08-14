@@ -1,33 +1,46 @@
 import { TAGS } from "lib/constants";
 import * as db from "lib/db";
+import type { MenuHandle } from "lib/db/data";
 import { cacheLife, cacheTag } from "next/cache";
 import { cookies } from "next/headers";
-import { Cart, Collection, Menu, Page, Product } from "./types";
+import { Cart, Collection, Menu, Page, Product, StoredCart } from "./types";
 
 // Same public API the template's Shopify provider exposed, backed by the
 // in-memory database in lib/db instead of the Shopify Storefront API.
 
-export async function createCart(): Promise<Cart> {
+export async function createCart(): Promise<StoredCart> {
   return db.insertCart();
+}
+
+// CartModal creates the cart and sets the cookie when a session arrives
+// without one, so the mutations below normally find it. When they do not,
+// failing here beats writing the lines into a cart keyed on `undefined`, which
+// the shopper would never see again; the calling server action reports the
+// named error to Sentry.
+async function requireCartId(): Promise<string> {
+  const cartId = (await cookies()).get("cartId")?.value;
+
+  if (!cartId) {
+    throw new Error("Cart cookie is missing; this session has no cart");
+  }
+
+  return cartId;
 }
 
 export async function addToCart(
   lines: { merchandiseId: string; quantity: number }[],
 ): Promise<Cart> {
-  const cartId = (await cookies()).get("cartId")?.value!;
-  return db.insertCartLines(cartId, lines);
+  return db.insertCartLines(await requireCartId(), lines);
 }
 
 export async function removeFromCart(lineIds: string[]): Promise<Cart> {
-  const cartId = (await cookies()).get("cartId")?.value!;
-  return db.deleteCartLines(cartId, lineIds);
+  return db.deleteCartLines(await requireCartId(), lineIds);
 }
 
 export async function updateCart(
   lines: { id: string; merchandiseId: string; quantity: number }[],
 ): Promise<Cart> {
-  const cartId = (await cookies()).get("cartId")?.value!;
-  return db.updateCartLines(cartId, lines);
+  return db.updateCartLines(await requireCartId(), lines);
 }
 
 export async function getCart(): Promise<Cart | undefined> {
@@ -96,7 +109,7 @@ export async function getCollections(): Promise<Collection[]> {
   ];
 }
 
-export async function getMenu(handle: string): Promise<Menu[]> {
+export async function getMenu(handle: MenuHandle): Promise<Menu[]> {
   "use cache";
   cacheTag(TAGS.collections);
   cacheLife("days");

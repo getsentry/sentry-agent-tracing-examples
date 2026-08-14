@@ -3,7 +3,7 @@ import { tool } from "ai";
 import * as db from "lib/db";
 import { issueRefund } from "lib/payments";
 import type { InferUITools, UIDataTypes, UIMessage } from "ai";
-import type { Product } from "lib/commerce/types";
+import type { OrderStatus, Product } from "lib/commerce/types";
 import { z } from "zod";
 
 // Compact product shape returned by tools: enough for the chat's product
@@ -32,7 +32,7 @@ export type AccountInfo = {
   orders: {
     id: string;
     createdAt: string;
-    status: string;
+    status: OrderStatus;
     total: string;
     currencyCode: string;
     items: {
@@ -55,8 +55,9 @@ const toCard = (product: Product): ProductCard => ({
 });
 
 // Built per request rather than once at module scope: every tool that touches
-// account data is scoped to the shopper the request resolved to.
-export function createTools(customerId: string) {
+// account data is scoped to the shopper the request resolved to, and the
+// conversation id is carried in so domain logs can be joined to the chat.
+export function createTools(customerId: string, conversationId?: string) {
   return {
     searchProducts: tool({
       description:
@@ -156,29 +157,34 @@ export function createTools(customerId: string) {
           };
         }
 
-        try {
-          const payment = await db.selectPayment(orderId);
-          const refund = await issueRefund({
-            chargeId: payment.chargeId,
-            amount: order.total.amount,
-            currencyCode: order.total.currencyCode,
-          });
-          return {
-            refunded: true as const,
-            refundId: refund.refundId,
-            orderId,
-            amount: order.total.amount,
-            currencyCode: order.total.currencyCode,
-          };
-        } catch (error) {
-          // The AI SDK catches tool errors and feeds them back to the model as
-          // an error result, so capture here or no issue is ever created.
-          // handled:false because from the app's perspective the tool crashed;
-          // rethrowing keeps the execute_tool span failed and lets the model
-          // apologize to the customer.
-          Sentry.captureException(error, { mechanism: { handled: false } });
-          throw error;
-        }
+        // selectPayment throws for orders that predate the payments launch —
+        // the demo's planted failure. Nothing catches it here on purpose: the
+        // AI SDK turns the rejection into a tool-error result, and Sentry's
+        // VercelAI integration captures that with mechanism
+        // `auto.vercelai.channel`, so a manual capture would double the issue.
+        const payment = await db.selectPayment(orderId);
+        const refund = await issueRefund({
+          chargeId: payment.chargeId,
+          amount: order.total.amount,
+          currencyCode: order.total.currencyCode,
+        });
+
+        Sentry.logger.info("commerce.refund.issued", {
+          "commerce.order_id": orderId,
+          "commerce.refund_id": refund.refundId,
+          "commerce.amount": order.total.amount,
+          "commerce.currency": order.total.currencyCode,
+          "gen_ai.conversation.id": conversationId,
+          "user.id": customerId,
+        });
+
+        return {
+          refunded: true as const,
+          refundId: refund.refundId,
+          orderId,
+          amount: order.total.amount,
+          currencyCode: order.total.currencyCode,
+        };
       },
     }),
   };

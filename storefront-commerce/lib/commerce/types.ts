@@ -113,6 +113,12 @@ export type Cart = {
   totalQuantity: number;
 };
 
+// `Cart.id` is optional because the client keeps an optimistic cart before the
+// server has one (see components/cart/cart-context.tsx). Anything the database
+// returns already has its id, and callers that need to write the cookie say so
+// with this type instead of asserting.
+export type StoredCart = Cart & { id: string };
+
 export type Customer = {
   id: string;
   firstName: string;
@@ -141,3 +147,5 @@ export type Order = {
   lines: OrderLine[];
   total: Money;
 };
+
+export type OrderStatus = Order["status"];

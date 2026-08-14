@@ -14,7 +14,7 @@ import React, {
   useOptimistic,
 } from "react";
 
-type UpdateType = "plus" | "minus" | "delete";
+export type UpdateType = "plus" | "minus" | "delete";
 
 type CartAction =
   | {
@@ -142,7 +142,7 @@ function cartReducer(state: Cart | undefined, action: CartAction): Cart {
             ? updateCartItem(item, updateType)
             : item,
         )
-        .filter(Boolean) as CartItem[];
+        .filter((item) => item !== null);
 
       if (updatedLines.length === 0) {
         return {

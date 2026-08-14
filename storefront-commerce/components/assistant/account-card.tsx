@@ -1,14 +1,15 @@
 import clsx from "clsx";
 import Price from "components/price";
 import type { AccountInfo } from "lib/ai/tools";
+import type { OrderStatus } from "lib/commerce/types";
 
-const statusStyles: Record<string, string> = {
+const statusStyles = {
   Delivered:
     "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
   "In transit": "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
   Processing:
     "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-};
+} satisfies Record<OrderStatus, string>;
 
 export function AccountCard({ customer, orders }: AccountInfo) {
   if (!customer) {
@@ -40,8 +41,7 @@ export function AccountCard({ customer, orders }: AccountInfo) {
               <span
                 className={clsx(
                   "rounded-full px-2 py-0.5 text-xs font-medium",
-                  statusStyles[order.status] ??
-                    "bg-neutral-100 text-neutral-800 dark:bg-neutral-900 dark:text-neutral-300",
+                  statusStyles[order.status],
                 )}
               >
                 {order.status}

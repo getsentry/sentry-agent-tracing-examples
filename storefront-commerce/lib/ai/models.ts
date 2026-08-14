@@ -1,23 +1,29 @@
+import { z } from "zod";
+
 // Models the assistant is allowed to run, as OpenRouter ids. Sentry refreshes
-// its pricing table from OpenRouter, so an id that exists there gets
-// gen_ai.cost.* computed server-side; an invented one silently costs nothing.
-// Current generation as of 2026-08-12, checked against
-// https://openrouter.ai/api/v1/models by release date, not version number.
-export const DEMO_MODELS = [
-  "anthropic/claude-opus-5", // 2026-07-24 · $5 / $25 per Mtok
-  "anthropic/claude-sonnet-5", // 2026-06-30 · $2 / $10
-  "openai/gpt-5.6-sol", // 2026-07-09 · $5 / $30
-  "openai/gpt-5.6-terra", // 2026-07-09 · $1 / $6
-  "openai/gpt-5.6-luna", // 2026-07-09 · $0.10 / $0.60
-  "x-ai/grok-4.6", // 2026-08-12 · $2 / $6
-  "google/gemini-3.6-flash", // 2026-07-21 · $1.50 / $7.50
+// its pricing table from OpenRouter, so an id listed at
+// https://openrouter.ai/api/v1/models gets gen_ai.cost.* computed server-side;
+// an invented one silently costs nothing.
+export const SUPPORTED_MODELS = [
+  "anthropic/claude-opus-5",
+  "anthropic/claude-sonnet-5",
+  "openai/gpt-5.6-sol",
+  "openai/gpt-5.6-terra",
+  "openai/gpt-5.6-luna",
+  "x-ai/grok-4.6",
+  "google/gemini-3.6-flash",
 ] as const;
 
-export type DemoModel = (typeof DEMO_MODELS)[number];
+export type SupportedModel = (typeof SUPPORTED_MODELS)[number];
 
-export const DEFAULT_MODEL: DemoModel = "anthropic/claude-sonnet-5";
+export const DEFAULT_MODEL: SupportedModel = "anthropic/claude-sonnet-5";
 
-export function modelById(id: string | null | undefined): string {
-  if (DEMO_MODELS.includes(id as DemoModel)) return id as DemoModel;
-  return process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
+const supportedModel = z.enum(SUPPORTED_MODELS);
+
+// OPENROUTER_MODEL is an untrusted string, so it goes through a parse: an id
+// outside the allow-list can never reach OpenRouter, where it would silently
+// produce no gen_ai.cost.*.
+export function resolveModel(): SupportedModel {
+  const configured = supportedModel.safeParse(process.env.OPENROUTER_MODEL);
+  return configured.success ? configured.data : DEFAULT_MODEL;
 }

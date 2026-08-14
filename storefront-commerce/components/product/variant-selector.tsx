@@ -53,12 +53,13 @@ export function VariantSelector({
           {option.values.map((value) => {
             const optionNameLowerCase = option.name.toLowerCase();
 
-            // Base option params on current searchParams so we can preserve any other param state.
             const optionParams: Record<string, string> = {};
             searchParams.forEach((v, k) => (optionParams[k] = v));
             optionParams[optionNameLowerCase] = value;
 
-            // Filter out invalid options and check if the option combination is available for sale.
+            // The URL can carry params that name no option of this product, so
+            // only the ones matching a real option/value pair may take part in
+            // the availability lookup.
             const filtered = Object.entries(optionParams).filter(
               ([key, value]) =>
                 options.find(
@@ -74,7 +75,6 @@ export function VariantSelector({
               ),
             );
 
-            // The option is active if it's in the selected options.
             const isActive = searchParams.get(optionNameLowerCase) === value;
 
             return (

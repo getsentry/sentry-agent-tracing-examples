@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import * as Sentry from "@sentry/node";
 import { Sandbox } from "@vercel/sandbox";
+import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
 
@@ -34,11 +36,11 @@ export function mealBudgetUsd(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 25;
 }
 
-interface DdEnvelope {
-  content?: { type: string; text?: string }[];
-  structuredContent?: Record<string, unknown>;
-  isError?: boolean;
-}
+const ddEnvelopeSchema = z.looseObject({
+  content: z.array(z.looseObject({ type: z.string(), text: z.string().optional() })).optional(),
+  structuredContent: z.unknown().optional(),
+  isError: z.boolean().optional(),
+});
 
 const DD_CLI_VERSION = "v0.2.2";
 const DD_CLI_TARBALL = `https://github.com/doordash-oss/doordash-cli/releases/download/${DD_CLI_VERSION}/dd-cli-${DD_CLI_VERSION}-linux-amd64.tar.gz`;
@@ -118,21 +120,24 @@ async function runDdLocally(argv: string[]): Promise<string> {
 }
 
 /**
- * Runs a dd-cli command with --json-output and returns the structured payload.
+ * Runs a dd-cli command with --json-output and parses the structured payload
+ * against `payload`. This module is the process's only dd-cli boundary: every
+ * command below owns a schema, so no caller ever handles raw CLI output.
+ *
  * dd-cli wraps every response in an MCP-style envelope; the real data lives
  * under structuredContent. Envelope-level errors throw so eve marks the tool
  * span failed (Sentry's Tool Errors widget); domain-level "not found" style
- * outcomes stay in the returned object for the model to relay.
+ * outcomes stay in the parsed payload for the model to relay.
  */
-export async function runDd(args: string[]): Promise<Record<string, unknown>> {
+async function runDd<T>(args: string[], payload: z.ZodType<T>): Promise<T> {
   const argv = ["--json-output", ...args, "--intent", INTENT];
   const stdout = runsInSandbox() ? await runDdInSandbox(argv) : await runDdLocally(argv);
-  const envelope = JSON.parse(stdout) as DdEnvelope;
+  const envelope = ddEnvelopeSchema.parse(JSON.parse(stdout));
   if (envelope.isError) {
     const text = envelope.content?.find((c) => c.text)?.text;
     throw new Error(`dd-cli ${args[0]} failed: ${text ?? "unknown error"}`);
   }
-  return envelope.structuredContent ?? {};
+  return payload.parse(envelope.structuredContent ?? {});
 }
 
 export interface CartLine {
@@ -153,28 +158,36 @@ export interface CartSummary {
   itemsCount: number;
 }
 
-interface RawCartObject {
-  id?: string;
-  store_id?: string | number;
-  store_name?: string;
-  is_group_cart?: boolean;
-  group_cart_url?: string | null;
-  spend_limit_cents?: number;
-  items?: { name?: string; quantity?: number; price?: number }[];
-  items_count?: number;
-}
+const cartSchema = z.looseObject({
+  id: z.string().optional(),
+  store_id: z.union([z.string(), z.number()]).optional(),
+  store_name: z.string().optional(),
+  is_group_cart: z.boolean().optional(),
+  group_cart_url: z.string().nullish(),
+  spend_limit_cents: z.number().nullish(),
+  items: z
+    .array(
+      z.looseObject({
+        name: z.string().optional(),
+        quantity: z.number().optional(),
+        price: z.number().optional(),
+      }),
+    )
+    .optional(),
+  items_count: z.number().optional(),
+});
 
-export function toCartSummary(cartUuid: string, cart: RawCartObject): CartSummary {
+type Cart = z.infer<typeof cartSchema>;
+
+function toCartSummary(cartUuid: string, cart: Cart): CartSummary {
+  const spendLimitCents = cart.spend_limit_cents ?? 0;
   return {
     cartUuid,
     storeId: String(cart.store_id ?? ""),
     storeName: cart.store_name ?? "",
     isGroupCart: cart.is_group_cart ?? false,
     groupCartUrl: cart.group_cart_url ?? null,
-    spendLimitUsd:
-      typeof cart.spend_limit_cents === "number" && cart.spend_limit_cents > 0
-        ? cart.spend_limit_cents / 100
-        : null,
+    spendLimitUsd: spendLimitCents > 0 ? spendLimitCents / 100 : null,
     items: (cart.items ?? []).map((item) => ({
       name: item.name,
       quantity: item.quantity,
@@ -184,9 +197,21 @@ export function toCartSummary(cartUuid: string, cart: RawCartObject): CartSummar
   };
 }
 
+const cartListSchema = z.looseObject({
+  carts: z.array(z.looseObject({ cart_uuid: z.string().optional() })).optional(),
+});
+
+/** UUIDs of every open cart on the signed-in account. */
+export async function ddCartList(): Promise<string[]> {
+  const listed = await runDd(["cart", "list"], cartListSchema);
+  return (listed.carts ?? []).flatMap((cart) => (cart.cart_uuid ? [cart.cart_uuid] : []));
+}
+
+const cartShowSchema = z.looseObject({ cart: cartSchema.optional() });
+
 export async function showCart(cartUuid: string): Promise<CartSummary> {
-  const shown = await runDd(["cart", "show", "--cart-uuid", cartUuid]);
-  return toCartSummary(cartUuid, (shown.cart ?? {}) as RawCartObject);
+  const shown = await runDd(["cart", "show", "--cart-uuid", cartUuid], cartShowSchema);
+  return toCartSummary(cartUuid, shown.cart ?? {});
 }
 
 export interface Restaurant {
@@ -199,38 +224,52 @@ export interface Restaurant {
   reviewCount: number | null;
 }
 
-interface RawStore {
-  store_id?: string | number;
-  name?: string;
-  image_url?: string | null;
-  distance?: string;
-  delivery_time?: string;
-  rating?: number;
-  review_count?: number;
-  is_link_out?: boolean;
-}
+const searchSchema = z.looseObject({
+  stores: z
+    .array(
+      z.looseObject({
+        store_id: z.union([z.string(), z.number()]).optional(),
+        name: z.string().optional(),
+        image_url: z.string().nullish(),
+        distance: z.string().optional(),
+        delivery_time: z.string().optional(),
+        rating: z.number().optional(),
+        review_count: z.number().optional(),
+        is_link_out: z.boolean().optional(),
+      }),
+    )
+    .optional(),
+});
 
-interface RawAddress {
-  lat?: number;
-  lng?: number;
-  printable_address?: string;
-  is_default?: boolean;
-}
+const addressListSchema = z.looseObject({
+  addresses: z
+    .array(
+      z.looseObject({
+        lat: z.number().optional(),
+        lng: z.number().optional(),
+        printable_address: z.string().optional(),
+        is_default: z.boolean().optional(),
+      }),
+    )
+    .optional(),
+});
 
-let cachedAddress: { lat: number; lng: number; printable: string } | undefined;
-
-/** `search` ignores the account's saved address and needs coordinates, so the
- * default address supplies them. Cached — it changes far less often than a turn. */
-export async function defaultDeliveryPoint(): Promise<{
+export interface DeliveryPoint {
   lat: number;
   lng: number;
   printable: string;
-}> {
+}
+
+let cachedAddress: DeliveryPoint | undefined;
+
+/** `search` ignores the account's saved address and needs coordinates, so the
+ * default address supplies them. Cached — it changes far less often than a turn. */
+export async function defaultDeliveryPoint(): Promise<DeliveryPoint> {
   if (cachedAddress) return cachedAddress;
-  const listed = await runDd(["address", "list"]);
-  const addresses = (listed.addresses ?? []) as RawAddress[];
+  const listed = await runDd(["address", "list"], addressListSchema);
+  const addresses = listed.addresses ?? [];
   const chosen = addresses.find((a) => a.is_default) ?? addresses[0];
-  if (!chosen || typeof chosen.lat !== "number" || typeof chosen.lng !== "number") {
+  if (chosen?.lat === undefined || chosen.lng === undefined) {
     throw new Error("No saved DoorDash delivery address with coordinates — add one in the app first.");
   }
   cachedAddress = {
@@ -241,20 +280,23 @@ export async function defaultDeliveryPoint(): Promise<{
   return cachedAddress;
 }
 
-export async function searchRestaurants(query: string, limit = 8): Promise<Restaurant[]> {
+export async function ddSearch(query: string, limit = 8): Promise<Restaurant[]> {
   const { lat, lng } = await defaultDeliveryPoint();
-  const result = await runDd([
-    "search",
-    "--query",
-    query,
-    "--limit",
-    String(limit),
-    "--lat",
-    String(lat),
-    "--lng",
-    String(lng),
-  ]);
-  return ((result.stores ?? []) as RawStore[])
+  const result = await runDd(
+    [
+      "search",
+      "--query",
+      query,
+      "--limit",
+      String(limit),
+      "--lat",
+      String(lat),
+      "--lng",
+      String(lng),
+    ],
+    searchSchema,
+  );
+  return (result.stores ?? [])
     // Link-out stores hand off to DoorDash's own web flow, so the cart
     // commands can't build an order for them.
     .filter((store) => store.is_link_out !== true)
@@ -264,9 +306,77 @@ export async function searchRestaurants(query: string, limit = 8): Promise<Resta
       imageUrl: store.image_url ?? null,
       distance: store.distance ?? "",
       deliveryTime: store.delivery_time ?? "",
-      rating: typeof store.rating === "number" ? store.rating : null,
-      reviewCount: typeof store.review_count === "number" ? store.review_count : null,
+      rating: store.rating ?? null,
+      reviewCount: store.review_count ?? null,
     }));
+}
+
+export interface MenuItem {
+  itemId: string;
+  name: string;
+  description: string | null;
+  priceUsd: number | null;
+  priceVaries: boolean;
+  imageUrl: string | null;
+  categoryName: string | null;
+  hasRequiredModifiers: boolean;
+}
+
+export interface StoreMenu {
+  menuId: string;
+  storeName: string | null;
+  /** Null when dd-cli omitted the flag; only the menu payload reports it. */
+  storeIsOpen: boolean | null;
+  items: MenuItem[];
+}
+
+const menuSchema = z.looseObject({
+  menu_id: z.union([z.string(), z.number()]).optional(),
+  store_name: z.string().nullish(),
+  store_is_open: z.boolean().optional(),
+  items: z
+    .array(
+      z.looseObject({
+        item_id: z.string().optional(),
+        name: z.string().optional(),
+        description: z.string().nullish(),
+        image_url: z.string().nullish(),
+        price: z.number().optional(),
+        price_varies: z.boolean().optional(),
+        is_orderable: z.boolean().optional(),
+        has_required_modifiers: z.boolean().optional(),
+        category_name: z.string().nullish(),
+      }),
+    )
+    .optional(),
+});
+
+export async function ddMenu(storeId: string): Promise<StoreMenu> {
+  const menu = await runDd(["menu", "--store-id", storeId], menuSchema);
+  // is_popular / popularity_rank are deliberately not surfaced: the CLI docs
+  // ask agents not to base any decision on them.
+  const items = (menu.items ?? []).flatMap((item): MenuItem[] =>
+    item.is_orderable === false || !item.item_id
+      ? []
+      : [
+          {
+            itemId: stripCatalogPrefix(item.item_id),
+            name: item.name ?? "",
+            description: item.description ?? null,
+            priceUsd: item.price ?? null,
+            priceVaries: item.price_varies ?? false,
+            imageUrl: item.image_url ?? null,
+            categoryName: item.category_name ?? null,
+            hasRequiredModifiers: item.has_required_modifiers ?? false,
+          },
+        ],
+  );
+  return {
+    menuId: String(menu.menu_id ?? ""),
+    storeName: menu.store_name ?? null,
+    storeIsOpen: menu.store_is_open ?? null,
+    items,
+  };
 }
 
 /**
@@ -277,9 +387,252 @@ export async function searchRestaurants(query: string, limit = 8): Promise<Resta
  */
 export async function storeIsOpen(storeId: string): Promise<boolean | null> {
   try {
-    const menu = await runDd(["menu", "--store-id", storeId]);
-    return typeof menu.store_is_open === "boolean" ? menu.store_is_open : null;
-  } catch {
+    return (await ddMenu(storeId)).storeIsOpen;
+  } catch (error) {
+    // Deliberate capture: the caller degrades to "unknown, keep the store",
+    // so without this the probe failure would never reach Sentry.
+    Sentry.captureException(error);
     return null;
   }
+}
+
+export interface ItemOption {
+  optionId: string;
+  name: string;
+  priceUsd: number;
+  extras: ItemExtra[];
+}
+
+export interface ItemExtra {
+  title: string;
+  required: boolean;
+  minNumOptions: number;
+  maxNumOptions: number;
+  numFreeOptions: number;
+  options: ItemOption[];
+}
+
+export interface ItemDetails {
+  itemId: string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  basePriceUsd: number | null;
+  priceVaries: boolean;
+  extras: ItemExtra[];
+}
+
+interface RawExtra {
+  extra_id?: string;
+  title?: string;
+  min_num_options?: number;
+  max_num_options?: number;
+  num_free_options?: number;
+  options?: RawOption[];
+}
+
+interface RawOption {
+  option_id?: string;
+  name?: string;
+  price?: number;
+  extras?: RawExtra[];
+}
+
+// Customization groups nest without a documented depth limit (a combo meal's
+// side has its own size options), so the two schemas reference each other.
+const rawExtraSchema: z.ZodType<RawExtra> = z.lazy(() =>
+  z.looseObject({
+    extra_id: z.string().optional(),
+    title: z.string().optional(),
+    min_num_options: z.number().optional(),
+    max_num_options: z.number().optional(),
+    num_free_options: z.number().optional(),
+    options: z.array(rawOptionSchema).optional(),
+  }),
+);
+
+const rawOptionSchema: z.ZodType<RawOption> = z.lazy(() =>
+  z.looseObject({
+    option_id: z.string().optional(),
+    name: z.string().optional(),
+    price: z.number().optional(),
+    extras: z.array(rawExtraSchema).optional(),
+  }),
+);
+
+const itemDetailsSchema = z.looseObject({
+  item: z
+    .looseObject({
+      item_id: z.string().optional(),
+      name: z.string().optional(),
+      description: z.string().nullish(),
+      image_url: z.string().nullish(),
+      price: z.number().optional(),
+      price_varies: z.boolean().optional(),
+      extras: z.array(rawExtraSchema).optional(),
+    })
+    .optional(),
+});
+
+function toItemExtras(extras: RawExtra[] | undefined): ItemExtra[] {
+  return (extras ?? []).map((extra) => ({
+    title: extra.title ?? "",
+    required: (extra.min_num_options ?? 0) > 0,
+    minNumOptions: extra.min_num_options ?? 0,
+    maxNumOptions: extra.max_num_options ?? 0,
+    numFreeOptions: extra.num_free_options ?? 0,
+    options: (extra.options ?? []).flatMap((option): ItemOption[] =>
+      option.option_id
+        ? [
+            {
+              optionId: stripCatalogPrefix(option.option_id),
+              name: option.name ?? "",
+              priceUsd: option.price ?? 0,
+              extras: toItemExtras(option.extras),
+            },
+          ]
+        : [],
+    ),
+  }));
+}
+
+export async function ddItemDetails(
+  storeId: string,
+  menuId: string,
+  itemId: string,
+): Promise<ItemDetails> {
+  const bareItemId = stripCatalogPrefix(itemId);
+  const details = await runDd(
+    [
+      "restaurant-item-details",
+      "--store-id",
+      storeId,
+      "--menu-id",
+      menuId,
+      "--item-id",
+      bareItemId,
+    ],
+    itemDetailsSchema,
+  );
+  const item = details.item ?? {};
+  return {
+    itemId: item.item_id ? stripCatalogPrefix(item.item_id) : bareItemId,
+    name: item.name ?? "",
+    description: item.description ?? null,
+    imageUrl: item.image_url ?? null,
+    basePriceUsd: item.price ?? null,
+    priceVaries: item.price_varies ?? false,
+    extras: toItemExtras(item.extras),
+  };
+}
+
+const cartItemErrorSchema = z.json();
+
+/**
+ * dd-cli's per-item rejection payload. Its fields are undocumented and vary by
+ * rejection reason (required_options entries, catalog errors), so it is carried
+ * as JSON and relayed to the model verbatim rather than given an invented shape.
+ */
+export type CartItemError = z.infer<typeof cartItemErrorSchema>;
+
+export interface CartAddOutcome {
+  added: boolean;
+  itemErrors: CartItemError[];
+  message: string | null;
+  cart: CartSummary;
+}
+
+const cartAddSchema = z.looseObject({
+  success: z.boolean().optional(),
+  item_errors: z.array(cartItemErrorSchema).optional(),
+  message: z.string().nullish(),
+  cart_uuid: z.string().optional(),
+  cart: cartSchema.optional(),
+});
+
+export async function ddCartAddItems(
+  storeId: string,
+  menuId: string,
+  cartUuid: string | undefined,
+  itemsJson: string,
+): Promise<CartAddOutcome> {
+  const result = await runDd(
+    [
+      "cart",
+      "add-items",
+      "--store-id",
+      storeId,
+      "--menu-id",
+      menuId,
+      // Without --cart-uuid dd-cli appends to this store's open cart, or
+      // creates one — which is what a personal order wants.
+      ...(cartUuid ? ["--cart-uuid", cartUuid] : []),
+      "--items-json",
+      itemsJson,
+    ],
+    cartAddSchema,
+  );
+  const itemErrors = result.item_errors ?? [];
+  return {
+    added: result.success === true && itemErrors.length === 0,
+    itemErrors,
+    message: result.message ?? null,
+    cart: toCartSummary(result.cart_uuid ?? cartUuid ?? "", result.cart ?? {}),
+  };
+}
+
+export interface QuoteLine {
+  label: string;
+  amountDisplay: string;
+  amountMinorUnits: number;
+  currency: string | null;
+}
+
+export interface OrderQuote {
+  lines: QuoteLine[];
+  errorMessage: string | null;
+}
+
+const orderPreviewSchema = z.looseObject({
+  error_message: z.string().nullish(),
+  quote: z
+    .looseObject({
+      line_items: z
+        .array(
+          z.looseObject({
+            charge_id: z.string().optional(),
+            label: z.string().optional(),
+            final_money: z
+              .looseObject({
+                unit_amount: z.number().optional(),
+                currency: z.string().optional(),
+                display_string: z.string().optional(),
+              })
+              .optional(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
+});
+
+export async function ddOrderPreview(cartUuid: string): Promise<OrderQuote> {
+  const result = await runDd(["order", "preview", "--cart-uuid", cartUuid], orderPreviewSchema);
+  const lines = (result.quote?.line_items ?? []).map((line) => ({
+    label: line.label ?? line.charge_id ?? "",
+    amountDisplay: line.final_money?.display_string ?? "",
+    amountMinorUnits: line.final_money?.unit_amount ?? 0,
+    currency: line.final_money?.currency ?? null,
+  }));
+  return { lines, errorMessage: result.error_message ?? null };
+}
+
+const checkoutUrlSchema = z.looseObject({
+  checkout_url: z.string().nullish(),
+  url: z.string().nullish(),
+});
+
+export async function ddCheckoutUrl(cartUuid: string): Promise<string | null> {
+  const result = await runDd(["order", "checkout-url", "--cart-uuid", cartUuid], checkoutUrlSchema);
+  return result.checkout_url ?? result.url ?? null;
 }

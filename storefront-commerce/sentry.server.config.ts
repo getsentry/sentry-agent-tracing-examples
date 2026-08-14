@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/nextjs";
 import { DEMO_USER } from "lib/demo-user";
+import { GEN_AI_CONTENT_CAPTURE } from "lib/sentry-content-capture";
 
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -24,13 +25,24 @@ Sentry.init({
   // correction, so the fix lives in the project's Stack Trace Rules
   // (Settings → Issue Grouping), not here. See
   // https://github.com/getsentry/sentry-javascript/issues/23176
-  // One switch for gen_ai content capture — prompts, outputs, and tool
-  // payloads. The integration reads this as its default, so no per-integration
-  // recordInputs/recordOutputs.
-  dataCollection: { genAI: { inputs: true, outputs: true } },
+
+  // Only the categories to switch off; the rest stay on. Inbound request
+  // bodies also need httpIntegration's maxIncomingRequestBodySize.
+  // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#dataCollection
+  // https://docs.sentry.io/platforms/javascript/guides/node/configuration/integrations/http/#maxincomingrequestbodysize
+  dataCollection: {
+    genAI: GEN_AI_CONTENT_CAPTURE,
+    httpHeaders: { request: false, response: false },
+    httpBodies: [],
+    cookies: false,
+    urlQueryParams: false,
+    graphQL: { document: false, variables: false },
+    stackFrameVariables: false,
+  },
   integrations: [
-    // Turns the AI SDK's telemetry into gen_ai.* agent spans. `force` keeps
-    // the semantic span names even when the build bundles the `ai` package.
-    Sentry.vercelAIIntegration({ force: true }),
+    // Turns the AI SDK's telemetry into gen_ai.* agent spans. ai >= 7 publishes
+    // on the `ai:telemetry` diagnostics channel this integration subscribes to,
+    // so no bundling or module-patching options are needed.
+    Sentry.vercelAIIntegration(),
   ],
 });

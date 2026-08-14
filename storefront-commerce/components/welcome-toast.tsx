@@ -5,7 +5,8 @@ import { toast } from "sonner";
 
 export function WelcomeToast() {
   useEffect(() => {
-    // ignore if screen height is too small
+    // The toast never expires on its own, so on a short viewport it would
+    // cover the storefront until the visitor dismisses it.
     if (window.innerHeight < 650) return;
     if (!document.cookie.includes("welcome-toast=2")) {
       toast("🛍️ Welcome to Acme Store!", {

@@ -3,6 +3,7 @@
 import { MinusIcon, PlusIcon } from "@heroicons/react/24/outline";
 import clsx from "clsx";
 import { updateItemQuantity } from "components/cart/actions";
+import type { UpdateType } from "components/cart/cart-context";
 import type { CartItem } from "lib/commerce/types";
 import { useActionState } from "react";
 
@@ -36,7 +37,7 @@ export function EditItemQuantityButton({
 }: {
   item: CartItem;
   type: "plus" | "minus";
-  optimisticUpdate: any;
+  optimisticUpdate: (merchandiseId: string, updateType: UpdateType) => void;
 }) {
   const [message, formAction] = useActionState(updateItemQuantity, null);
   const payload = {

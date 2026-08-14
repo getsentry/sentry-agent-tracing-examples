@@ -80,9 +80,7 @@ export default function ProductPage(props: {
   );
 }
 
-async function ProductContent(props: {
-  params: Promise<{ handle: string }>;
-}) {
+async function ProductContent(props: { params: Promise<{ handle: string }> }) {
   const params = await props.params;
   const product = await getProduct(params.handle);
 
