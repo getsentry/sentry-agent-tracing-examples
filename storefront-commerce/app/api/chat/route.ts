@@ -7,9 +7,9 @@ import {
   streamText,
   toUIMessageStream,
 } from "ai";
-import { modelById } from "lib/ai/models";
+import { resolveModel } from "lib/ai/models";
 import { createTools, type AssistantUIMessage } from "lib/ai/tools";
-import { shopperById } from "lib/demo-user";
+import { DEMO_USER } from "lib/demo-user";
 import { GEN_AI_CONTENT_CAPTURE } from "lib/sentry-content-capture";
 
 export const maxDuration = 30;
@@ -35,17 +35,10 @@ export async function POST(req: Request) {
   const { id, messages }: { id?: string; messages: AssistantUIMessage[] } =
     await req.json();
 
-  // The demo store has no sign-in, so the shopper and the model come off the
-  // request. Both resolve through an allow-list (lib/demo-user, lib/ai/models)
-  // and fall back to the defaults, so the headers only pick between fixtures.
-  const shopper = shopperById(req.headers.get("x-demo-shopper"));
-  const model = modelById(req.headers.get("x-demo-model"));
-  const seedRun = req.headers.get("x-demo-run");
-
   // Attribute this turn to the shopper and thread all turns of one chat
   // session into a single Sentry Conversation. Must happen before the AI call
   // so the gen_ai spans pick both up.
-  Sentry.setUser(shopper);
+  Sentry.setUser(DEMO_USER);
   if (id) {
     Sentry.setConversationId(id);
     // setConversationId only reaches gen_ai spans (it registers a spanStart
@@ -53,17 +46,14 @@ export async function POST(req: Request) {
     // this request, which is what makes an issue searchable back to its chat.
     Sentry.getIsolationScope().setTag("gen_ai.conversation.id", id);
   }
-  // Set by scripts/traffic.ts so a seeded batch can be filtered out of, or
-  // isolated in, the same views as real browser sessions.
-  if (seedRun) Sentry.getIsolationScope().setTag("demo.seed_run", seedRun);
 
   const result = streamText({
     // The single-argument call resolves to the provider's completion overload;
     // .chat is the one that matches this route's message-based prompt.
-    model: openrouter.chat(model),
+    model: openrouter.chat(resolveModel()),
     instructions,
     messages: await convertToModelMessages(messages),
-    tools: createTools(shopper.id, id),
+    tools: createTools(DEMO_USER.id, id),
     stopWhen: isStepCount(5),
     // functionId names the agent in Sentry's AI Agents dashboard. The AI SDK
     // emits prompts and completions on its telemetry channel, and

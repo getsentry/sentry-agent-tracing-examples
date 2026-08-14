@@ -9,7 +9,7 @@ the same `gen_ai.*` span model.
 | --- | --- | --- | --- |
 | [`slack-agent-eve/`](slack-agent-eve/) | [Eve](https://eve.dev) 0.34, `@sentry/node` | Slack, plus the local `eve dev` TUI | A DoorDash ordering agent driving `dd-cli` (in a Vercel Sandbox when deployed). Eve's AI SDK telemetry maps onto `gen_ai.*` spans; a Slack thread is one Sentry Conversation; the `estimate_nutrition` tool makes its own nested model call; each pick is a `meal.pick.added` log with calories and protein. |
 | [`storefront-commerce/`](storefront-commerce/) | AI SDK 7 on Next.js 16, `@sentry/nextjs` | Browser chat panel in a storefront | Agent tracing beside ordinary app tracing: hand-built `db.query` spans nest under the tool that opened them, tool results render as generative UI, one chat session is one Conversation, and `refundOrder` has a planted bug that raises a real issue. |
-| [`github-harness-flue/`](github-harness-flue/) | [Flue](https://flueframework.com) 2.0, `@sentry/node` | GitHub Action (`flue run`) | A headless PR reviewer: the `review-lead` agent delegates to two parallel subagents (`correctness-reviewer`, `style-reviewer`). Wired with Flue's `tooling/sentry@1` blueprint plus local deltas, which send spans, logs, and issues with matching `flue.*` tags. |
+| [`github-harness-flue/`](github-harness-flue/) | [Flue](https://flueframework.com) 2.0, `@sentry/node` | GitHub Action (`flue run`) | A headless PR reviewer: the `review-lead` agent delegates to two parallel subagents (`correctness-reviewer`, `style-reviewer`). One file wires Sentry end to end — spans, logs, and issues that all carry matching `flue.*` tags — and the agent code holds no Sentry calls of its own. |
 
 Every model call goes through OpenRouter. Each demo is a self-contained npm
 project — there is no workspace root.
@@ -29,6 +29,14 @@ project — there is no workspace root.
   on when the variable is unset; set one to `false` to stop sending it. Each
   demo passes the pair to `dataCollection.genAI` on `Sentry.init` and to its
   framework's own content switch, so the two never disagree.
+- Prompts and completions are the only content these demos send. Cookies,
+  HTTP headers, HTTP bodies, URL query parameters and stack-frame variables are
+  turned off in all five app `Sentry.init` blocks — the storefront's server,
+  edge and browser configs, Eve, and Flue — so nothing from an outbound call to
+  OpenRouter, Slack or GitHub is collected. The SDK redacts keys whose name
+  matches its sensitive-key denylist, but that is a denylist, not a guarantee.
+  Each category is written out explicitly: supplying `dataCollection` at all
+  switches the baseline to the SDK's defaults, which are all-on.
 
 ## Setup
 
@@ -48,6 +56,20 @@ Everything else in each `.env.example` is optional or channel-specific: Slack
 tokens, a GitHub token, `dd-cli` credentials, model overrides, and source-map
 upload. Missing optional variables degrade gracefully.
 
+## A dashboard for the spans
+
+[`dashboards/llm-spend-per-user.sh`](dashboards/llm-spend-per-user.sh) builds an
+LLM spend dashboard and two spend alerts with the
+[Sentry CLI](https://docs.sentry.io/cli/):
+
+```bash
+./dashboards/llm-spend-per-user.sh <org-slug> <project-slug>
+```
+
+Eight widgets — spend and tokens over time, top spenders, cost by model, most
+expensive conversations — all from the `gen_ai.*` attributes the three demos
+send, so the script works against any project that sends them.
+
 ## Working in the repo
 
 Each demo has `npm run lint` (oxlint with the local anti-slop plugin in
@@ -55,6 +77,5 @@ Each demo has `npm run lint` (oxlint with the local anti-slop plugin in
 
 ## Where to look next
 
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — the call stack to span tree mapping
-  for each demo, and a comparison of the three instrumentation approaches.
-- Each demo's own `README.md` — how to run it and what to look at in Sentry.
+Each demo's own `README.md` — how to run it, the span tree one agent turn
+produces, and what to look at in Sentry.

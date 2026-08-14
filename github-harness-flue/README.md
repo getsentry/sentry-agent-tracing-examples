@@ -23,7 +23,7 @@ while the issues it reasons about live in the app's project (`SENTRY_APP_PROJECT
 
 All model calls route through OpenRouter (Flue's built-in `openrouter/…` provider — the only
 credential needed is `OPENROUTER_API_KEY`). Sentry is wired via Flue's official integration
-(`src/sentry.ts`, the `tooling/sentry` blueprint plus the deltas listed at the end of this file):
+(`src/sentry.ts`, described under [The Sentry bridge](#the-sentry-bridge) below):
 `Sentry.init` owns the global OpenTelemetry tracer provider and Flue's OTel GenAI adapter emits
 the spans. Because `flue run` never loads
 `app.ts`, the agent module imports `src/sentry.ts` itself. The CLI disposes instrumentation on
@@ -31,7 +31,7 @@ exit, which awaits `Sentry.flush` — nothing is lost when the short-lived CI pr
 
 ```
 src/agents/review.ts    review-lead agent + both subagents + tools + Sentry MCP connection
-src/sentry.ts           The Sentry bridge from Flue's blueprint (traces, logs, issues)
+src/sentry.ts           The whole Sentry setup (traces, logs, issues)
 fixtures/sample.diff    A diff with seeded correctness and style problems
 fixtures/fix.diff       A diff that FIXES those problems (drives the Sentry impact demo)
 github-workflow/review.yml   The GitHub Actions workflow
@@ -126,18 +126,39 @@ the same values. Whatever is recorded is scrubbed of sensitive keys and truncate
 attribute. `SENTRY_TRACES_SAMPLE_RATE` must be > 0 or you get errors and logs only; unset it
 defaults to 1, and a value outside 0–1 warns and falls back to 1.
 
-## Blueprint deltas
+That gen_ai content is the only content this harness sends. The `Sentry.init` spells out every
+`dataCollection` category and keeps cookies, HTTP headers, HTTP bodies, URL query parameters and
+stack-frame variables off, so nothing from the calls to GitHub and OpenRouter is collected — the
+SDK's redaction of sensitive key names is a denylist, and frame locals are not filtered at all.
+The categories are written out rather than omitted: supplying `dataCollection` at all switches the
+baseline to the SDK's defaults, which turn every category on.
 
-`src/sentry.ts` starts from Flue's published `tooling/sentry@1` blueprint and changes four things.
-Each is a candidate for the next blueprint revision; this repo is where they are being tried.
+## The Sentry bridge
 
-- `submission_recovery` events become Sentry Logs rather than breadcrumbs, so a retry or
-  reconciliation is searchable on its own instead of only surviving attached to a later issue.
-- gen_ai content capture is on unless turned off: `SENTRY_AI_RECORD_INPUTS` /
-  `SENTRY_AI_RECORD_OUTPUTS` default to true and drive both `dataCollection.genAI` and the
-  adapter's per-direction transform. A demo with hidden prompts shows nothing; a production
-  blueprint would default the other way.
-- `streamGenAiSpans: true` is dropped — the SDK streams gen_ai spans unless the option is set to
-  `false`.
-- `WorkersAI` joins the list of provider integrations that are filtered out, so a Cloudflare
-  deployment does not double-count model calls the way a Node one would.
+`src/sentry.ts` is the entire Sentry setup for this harness. The agent code contains no Sentry
+calls at all. Read it as a baseline: everything a Flue agent needs to be observable end to end,
+and nothing past that.
+
+- **Traces.** `Sentry.init` owns the global OpenTelemetry tracer provider, so Flue's
+  `@flue/opentelemetry` adapter needs no exporter of its own. Sentry's provider integrations —
+  the ones that patch the Anthropic, OpenAI or Vercel AI SDKs directly — are filtered out,
+  because the adapter already emits one `chat` span per model turn and both would count it.
+- **AI views.** The adapter sets no `sentry.op`, so `beforeSendSpan` derives one from the span
+  name (`invoke_agent …` becomes `gen_ai.invoke_agent`). Without it the spans arrive as
+  `op:default` and stay out of the AI Agents views, the spend dashboard, and the AI detectors.
+- **One review is one conversation.** A delegation opens a *child* conversation with its own id,
+  and Sentry's Conversations view groups strictly by `gen_ai.conversation.id` — so one review
+  would split into three rows. The bridge pins the first conversation of a submission as the
+  root and writes it onto every span, keeping the child id as `flue.conversation.id`. It also
+  restores each subagent's own name, which only `task_start` knows.
+- **Issues.** A terminal failure raises one issue, not one per nested operation as the error
+  unwinds. Each issue carries the same `flue.*` and `gen_ai.conversation.id` tags the spans
+  carry, so one search term pivots between them.
+- **Logs.** Flue's log events and its submission-recovery events become Sentry Logs with those
+  same tags, so a retry or reconciliation is searchable on its own rather than only surviving
+  attached to a later issue.
+- **Content.** `SENTRY_AI_RECORD_INPUTS` and `SENTRY_AI_RECORD_OUTPUTS` drive both
+  `dataCollection.genAI` and the adapter's own transform, which never see each other's config.
+  Payloads are redacted by key name and capped at 16 KiB.
+- **Flush.** The bridge registers before the adapter, so the runtime disposes it after. Spans
+  are closed before the flush runs, not stranded in the buffer when a CI process ends.

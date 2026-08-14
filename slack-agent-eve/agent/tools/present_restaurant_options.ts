@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/node";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { conversationStash } from "../lib/conversation";
+import { activeConversation } from "../lib/conversation";
 import {
   imageAccessory,
   postCard,
@@ -93,7 +93,7 @@ export default defineTool({
     );
     postedCards.set(dedupeKey, posted.ts ?? "posted");
 
-    const conv = conversationStash();
+    const conv = activeConversation();
     for (const [index, choice] of choices.entries()) {
       const attributes: RestaurantOptionLog = {
         "meal.craving": craving,

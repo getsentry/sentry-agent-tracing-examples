@@ -41,10 +41,17 @@ export default defineTool({
   }),
   async execute({ items }) {
     // A separate cheap model call, nested inside this tool's execute_tool
-    // span. eve's registerTelemetry means every AI SDK call in the process is
-    // covered; Sentry's vercelAIIntegration is what gives the span its
-    // gen_ai.generate_content op. functionId keeps it apart from the main
-    // loop's calls in aggregate views, which otherwise show one blended model.
+    // span. eve's own telemetry registration means every AI SDK call in the
+    // process is covered; the span's gen_ai op comes from the beforeSendSpan
+    // derivation in agent/instrumentation.ts, since this demo filters the
+    // vercelAI integration out.
+    //
+    // functionId does not reach Sentry: eve stamps gen_ai.agent.name from the
+    // harness scope it is running in (agent-otel-provider.js onModelCallStarted),
+    // so this call arrives as the agent's own, and beforeSendSpan then rewrites
+    // its description to `invoke_agent <agent>`. In Sentry the only things that
+    // set it apart are the model id and its parent execute_tool span, so filter
+    // on gen_ai.request.model to see it alone.
     const { object } = await generateObject({
       model: openrouter.chat(process.env.NUTRITION_MODEL ?? "openai/gpt-5.6-luna"),
       telemetry: { functionId: "nutrition-estimator" },

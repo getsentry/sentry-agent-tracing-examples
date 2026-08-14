@@ -164,7 +164,7 @@ const cartSchema = z.looseObject({
   store_name: z.string().optional(),
   is_group_cart: z.boolean().optional(),
   group_cart_url: z.string().nullish(),
-  spend_limit_cents: z.number().optional(),
+  spend_limit_cents: z.number().nullish(),
   items: z
     .array(
       z.looseObject({

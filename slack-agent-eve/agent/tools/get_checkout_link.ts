@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/node";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { conversationStash } from "../lib/conversation";
+import { activeConversation } from "../lib/conversation";
 import { ddCheckoutUrl } from "../lib/dd";
 
 // Alias, not interface: only aliases get the implicit index signature that
@@ -32,7 +32,7 @@ export default defineTool({
       };
     }
 
-    const conv = conversationStash();
+    const conv = activeConversation();
     const attributes: CheckoutOfferedLog = { "meal.store": storeName };
     if (total != null) attributes["meal.total"] = total;
     if (currency) attributes["meal.currency"] = currency;

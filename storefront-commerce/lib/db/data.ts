@@ -328,9 +328,8 @@ export const PAGES: Page[] = [
   ),
 ];
 
-// One customer row per shopper in lib/demo-user. The chat route resolves which
-// one a request belongs to, so getAccountInfo and refundOrder answer with that
-// shopper's own orders.
+// The signed-in shopper (lib/demo-user) is cust_01; getAccountInfo and
+// refundOrder answer with that customer's own orders.
 export const CUSTOMERS: Customer[] = [
   {
     id: "cust_01",

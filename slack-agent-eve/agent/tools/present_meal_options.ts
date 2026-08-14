@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/node";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { conversationStash } from "../lib/conversation";
+import { activeConversation } from "../lib/conversation";
 import {
   imageAccessory,
   postCard,
@@ -150,9 +150,10 @@ export default defineTool({
 
     // One domain event per offered option — lets dashboards compare what
     // was offered against what got picked (meal.pick.added), by lane,
-    // price, and nutrition. The conversation id comes from the stash, not
-    // from the model's threadTs argument, so it always matches the spans.
-    const conv = conversationStash();
+    // price, and nutrition. The conversation id comes from the turn's own
+    // trace, not from the model's threadTs argument, so it always matches
+    // the spans.
+    const conv = activeConversation();
     for (const [index, option] of options.entries()) {
       const attributes: MealOptionLog = {
         "meal.store": storeName,

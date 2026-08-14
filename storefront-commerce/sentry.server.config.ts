@@ -26,34 +26,43 @@ Sentry.init({
   // (Settings → Issue Grouping), not here. See
   // https://github.com/getsentry/sentry-javascript/issues/23176
 
-  // Supplying `dataCollection` at all switches the baseline from
-  // sendDefaultPii to the SDK's DEFAULTS, which turn every category on. So
-  // each category this demo produces is written out here rather than left to
-  // that baseline, and the edge and client configs repeat the same set — one
-  // posture across all three runtimes. The storefront shows only fictional
-  // customers; a real app would start by turning cookies, headers, and
-  // httpBodies off.
+  // Supplying `dataCollection` at all switches the baseline from the
+  // sendDefaultPii bridge to the SDK's DEFAULTS, which turn every category on
+  // (@sentry/core resolveDataCollectionOptions). This demo has to supply it —
+  // gen_ai content is the whole point — so every other category is written out
+  // too: an omitted one would inherit that all-on baseline, not the
+  // conservative bridge. The edge and client configs repeat the same set, and
+  // so do the other two demos in this repo.
   dataCollection: {
     // Prompts, completions, and tool payloads, switched by
     // SENTRY_AI_RECORD_INPUTS / SENTRY_AI_RECORD_OUTPUTS. The vercelAI
     // integration reads this as its default, so no per-integration
     // recordInputs/recordOutputs.
     genAI: GEN_AI_CONTENT_CAPTURE,
+    // The shoppers are fictional (lib/demo-user), so the User column is safe
+    // to populate.
+    userInfo: true,
     // Only auto-instrumented database integrations read this; the lib/db spans
     // are hand-built, so their attributes are sent either way.
     databaseQueryData: true,
-    userInfo: true,
-    cookies: true,
-    httpHeaders: { request: true, response: true },
-    httpBodies: [
-      "incomingRequest",
-      "outgoingRequest",
-      "incomingResponse",
-      "outgoingResponse",
-    ],
-    urlQueryParams: true,
-    stackFrameVariables: true,
     frameContextLines: 5,
+    // The transport layer, all off. Turning any of it on only redacts keys
+    // whose *name* matches a fixed substring denylist (SENSITIVE_KEY_SNIPPETS
+    // in @sentry/core filterKeyValueData) — so `authorization` is caught, but
+    // a vendor-specific key header or a body field named anything else is sent
+    // verbatim, and this demo calls OpenRouter on every chat turn.
+    httpHeaders: { request: false, response: false },
+    httpBodies: [],
+    cookies: false,
+    urlQueryParams: false,
+    // `graphqlIntegration` is one of the Node SDK's defaults, but no `graphql`
+    // package is installed for it to patch, so this collects nothing today.
+    // Stated anyway, so the category is never inherited from the DEFAULTS
+    // baseline.
+    graphQL: { document: false, variables: false },
+    // Frame locals get no name filtering at all, and a frame in an API client
+    // holds whatever it was called with.
+    stackFrameVariables: false,
   },
   integrations: [
     // Turns the AI SDK's telemetry into gen_ai.* agent spans. ai >= 7 publishes

@@ -10,7 +10,6 @@
     "build": "eve build",
     "dev": "eve dev",
     "start": "eve start",
-    "seed": "node --env-file-if-exists=.env --env-file-if-exists=.env.local seeder/seed.ts",
     "lint": "oxlint",
     "typecheck": "tsc --noEmit"
   },

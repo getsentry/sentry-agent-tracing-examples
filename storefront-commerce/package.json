@@ -5,11 +5,10 @@
   },
   "scripts": {
     "dev": "next dev --turbopack",
-    "traffic": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/traffic.ts",
     "build": "next build",
     "start": "next start",
     "lint": "oxlint",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
+    "typecheck": "tsc --noEmit",
     "prettier": "prettier --write --ignore-unknown .",
     "prettier:check": "prettier --check --ignore-unknown ."
   },

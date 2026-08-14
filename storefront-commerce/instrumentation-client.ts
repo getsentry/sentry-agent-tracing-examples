@@ -14,19 +14,18 @@ Sentry.init({
   // category is spelled out.
   dataCollection: {
     genAI: GEN_AI_CONTENT_CAPTURE,
-    databaseQueryData: true,
+    // In the browser this also sets the span envelope's `infer_ip` and
+    // `infer_user_agent` to "auto" (@sentry/core tracing/spans/envelope.js),
+    // so ingest fills in the visitor's IP. Fine for a demo storefront.
     userInfo: true,
-    cookies: true,
-    httpHeaders: { request: true, response: true },
-    httpBodies: [
-      "incomingRequest",
-      "outgoingRequest",
-      "incomingResponse",
-      "outgoingResponse",
-    ],
-    urlQueryParams: true,
-    stackFrameVariables: true,
+    databaseQueryData: true,
     frameContextLines: 5,
+    httpHeaders: { request: false, response: false },
+    httpBodies: [],
+    cookies: false,
+    urlQueryParams: false,
+    graphQL: { document: false, variables: false },
+    stackFrameVariables: false,
   },
   integrations: [
     // Unmasked because the storefront shows no real user data; keep the

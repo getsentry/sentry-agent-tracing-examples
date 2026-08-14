@@ -10,19 +10,15 @@ Sentry.init({
   // category is spelled out.
   dataCollection: {
     genAI: GEN_AI_CONTENT_CAPTURE,
-    databaseQueryData: true,
     userInfo: true,
-    cookies: true,
-    httpHeaders: { request: true, response: true },
-    httpBodies: [
-      "incomingRequest",
-      "outgoingRequest",
-      "incomingResponse",
-      "outgoingResponse",
-    ],
-    urlQueryParams: true,
-    stackFrameVariables: true,
+    databaseQueryData: true,
     frameContextLines: 5,
+    httpHeaders: { request: false, response: false },
+    httpBodies: [],
+    cookies: false,
+    urlQueryParams: false,
+    graphQL: { document: false, variables: false },
+    stackFrameVariables: false,
   },
   // The signed-in shopper as a fallback only — see sentry.server.config.ts
   // for why this is not `initialScope`.

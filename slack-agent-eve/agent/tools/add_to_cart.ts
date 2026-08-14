@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/node";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { conversationStash } from "../lib/conversation";
+import { activeConversation } from "../lib/conversation";
 import {
   ddCartAddItems,
   ddItemDetails,
@@ -183,7 +183,7 @@ export default defineTool({
     // Opinionated split: spans stay the auto-instrumented system record;
     // this log wide event is the business record, with numeric attributes
     // so Explore/dashboards/alerts can sum calories and protein per user.
-    const conv = conversationStash();
+    const conv = activeConversation();
     const attributes: MealPickLog = {
       "meal.item": itemName,
       "meal.quantity": quantity,

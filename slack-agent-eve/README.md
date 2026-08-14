@@ -70,9 +70,9 @@ agent/
 ├── instructions.md          system prompt (Mealbot persona + both flows)
 ├── instrumentation.ts       Sentry.init + conversation id, user, Slack context per step
 ├── lib/dd.ts                dd-cli runner (local or Vercel Sandbox), search, budget, cart mapping
-├── lib/conversation.ts      cross-context stash for the Slack thread id
+├── lib/conversation.ts      Slack thread id of a turn, keyed by the turn's trace id
 ├── lib/slack-blocks.ts      the Block Kit shapes the cards post, and chat.postMessage
-├── lib/agent-name.ts        one agent name for the live agent and the seeder
+├── lib/agent-name.ts        the agent's name in Sentry's AI views
 ├── channels/
 │   ├── slack.ts             Slack channel; dispatches on group-cart links without a mention
 │   └── eve.ts               HTTP channel auth (dev TUI / eve invoke)
@@ -162,8 +162,7 @@ Note that the exported token expires after a few days.
    - `MEAL_BUDGET_USD` — budget the add tool enforces (default 25); a group order's own spend limit wins
 
    `eve dev` reads `.env.development.local`, `.env.local`, `.env.development`
-   and `.env`, in that order of precedence; `npm run seed` reads `.env` and
-   `.env.local`. One `.env` covers everything.
+   and `.env`, in that order of precedence. One `.env` covers everything.
 
 ## Run
 
@@ -200,27 +199,6 @@ it through a tunnel (Eve's own docs only cover deployed webhooks):
 4. Invite the bot to a channel. Post a group-order link — the
    manifest subscribes `message.channels`, so the link alone triggers it;
    @mentions and DMs also work.
-
-## Seeded demo data
-
-`seeder/` sends backdated fixture telemetry, so the spend dashboard has a few
-days of shape before anyone has used the bot. It builds `gen_ai` spans by hand —
-no model is called and nothing is charged — under the same agent name as the
-live agent, so seeded and live spend aggregate together. Only token counts and
-the OpenRouter model id are sent; Sentry prices them server-side.
-
-```bash
-npm run seed                        # small burst over the last three hours
-npm run seed -- --days 4 --spike    # four days of history + one retry-storm conversation
-npm run seed -- --days 4 --dry-run  # print the projected spend table, send nothing
-```
-
-`--days` is capped at 4 because Relay drops transactions older than five days.
-`--spike` adds the runaway turn the anomaly alert fires on. Also `--seed <n>`
-to replay a specific plan, `--only-days-back <a>-<b>` to re-send part of a
-rate-limited run, and `--environment <name>` (default `development`). Every
-seeded span carries `demo.seed_run:<run id>`, so a bad batch stays findable in
-Explore.
 
 ## What you'll see in Sentry
 
