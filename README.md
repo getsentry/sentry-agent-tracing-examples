@@ -80,8 +80,8 @@ send, so the script works against any project that sends them.
 
 ## Working in the repo
 
-Each demo has `npm run lint` (oxlint with the local anti-slop plugin in
-`tools/oxlint/`) and `npm run typecheck`. Run both from the demo directory.
+Each demo has `npm run lint` (oxlint) and `npm run typecheck`. Run both from
+the demo directory.
 
 ## Where to look next
 

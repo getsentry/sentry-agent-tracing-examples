@@ -21,7 +21,6 @@
 	},
 	"devDependencies": {
 		"@flue/cli": "2.0.3",
-		"@oxlint/plugins": "1.78.0",
 		"@types/node": "22.20.1",
 		"oxlint": "1.78.0",
 		"typescript": "7.0.2"
