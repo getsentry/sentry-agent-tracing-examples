@@ -39,6 +39,12 @@ present() { echo "has:$1 !$1:\"\""; }
 STATIC_DETECTOR="LLM spend rate high"
 ANOMALY_DETECTOR="LLM spend anomaly"
 
+# A detector is created under its project, but listed and deleted under the
+# organisation, which selects projects by numeric id rather than by slug.
+PROJECT_ID=$(sentry api "/api/0/projects/$ORG/$PROJECT/" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+DETECTORS="/api/0/organizations/$ORG/detectors/"
+
 # Every call below creates rather than updates, so a second run would leave a
 # duplicate dashboard and a second pair of detectors alerting on the same spend.
 named() {
@@ -53,7 +59,7 @@ print("\n".join(str(r["id"]) for r in rows if r.get(key) == os.environ["NEEDLE"]
 
 clashes=$(sentry api "/api/0/organizations/$ORG/dashboards/" | named "$TITLE" title)
 for name in "$STATIC_DETECTOR" "$ANOMALY_DETECTOR"; do
-  clashes="$clashes$(sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/" | named "$name" name)"
+  clashes="$clashes$(sentry api "$DETECTORS?project=$PROJECT_ID" | named "$name" name)"
 done
 if [ -n "$clashes" ]; then
   echo "$ORG/$PROJECT already has these; delete them or set TITLE= and rename the detectors:" >&2
@@ -149,7 +155,7 @@ DETECTOR_ID=$(sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/
   },
   "config": {"detectionType": "static"}'"$routing"'
 }' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-CREATED+=("/api/0/organizations/$ORG/projects/$PROJECT/detectors/$DETECTOR_ID/")
+CREATED+=("$DETECTORS$DETECTOR_ID/")
 echo "    id $DETECTOR_ID  $STATIC_DETECTOR"
 
 # Same query, no thresholds: Sentry learns the normal shape of the hour and
@@ -175,7 +181,7 @@ DETECTOR_ID=$(sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/
   },
   "config": {"detectionType": "dynamic"}'"$routing"'
 }' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-CREATED+=("/api/0/organizations/$ORG/projects/$PROJECT/detectors/$DETECTOR_ID/")
+CREATED+=("$DETECTORS$DETECTOR_ID/")
 echo "    id $DETECTOR_ID  $ANOMALY_DETECTOR"
 
 trap - ERR
