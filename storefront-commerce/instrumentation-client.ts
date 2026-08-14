@@ -29,7 +29,9 @@ Sentry.init({
   },
   integrations: [
     // Unmasked because the storefront shows no real user data; keep the
-    // defaults in apps with actual PII.
+    // defaults in apps with actual PII. This outranks GEN_AI_CONTENT_CAPTURE
+    // above: a replay records answers as they are painted, so switching span
+    // content off does not stop a completion reaching Sentry through here.
     Sentry.replayIntegration({ maskAllText: false, blockAllMedia: false }),
   ],
 });

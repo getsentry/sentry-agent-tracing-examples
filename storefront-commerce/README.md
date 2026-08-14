@@ -43,7 +43,11 @@ Built on the [Next.js Commerce](https://github.com/vercel/commerce) template
   all-on defaults, so omitting a category is not the safe move. The chat route
   also sets the Sentry user and
   conversation ID so multi-turn chats group in **Explore → Conversations**, and
-  the browser records a session replay for every session.
+  the browser records a session replay for every session. The replay is
+  unmasked, so it carries the rendered answers and account details whatever the
+  two content switches say — they only cover span content. The store's one
+  shopper is fictional; keep Replay's masking defaults where the customers are
+  real.
 
 ## Setup
 

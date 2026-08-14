@@ -29,14 +29,22 @@ project — there is no workspace root.
   on when the variable is unset; set one to `false` to stop sending it. Each
   demo passes the pair to `dataCollection.genAI` on `Sentry.init` and to its
   framework's own content switch, so the two never disagree.
-- Prompts and completions are the only content these demos send. Cookies,
-  HTTP headers, HTTP bodies, URL query parameters and stack-frame variables are
-  turned off in all five app `Sentry.init` blocks — the storefront's server,
-  edge and browser configs, Eve, and Flue — so nothing from an outbound call to
-  OpenRouter, Slack or GitHub is collected. The SDK redacts keys whose name
-  matches its sensitive-key denylist, but that is a denylist, not a guarantee.
-  Each category is written out explicitly: supplying `dataCollection` at all
-  switches the baseline to the SDK's defaults, which are all-on.
+- Prompts and completions are the only content the SDK collects on its own.
+  Cookies, HTTP headers, HTTP bodies, URL query parameters and stack-frame
+  variables are turned off in all five app `Sentry.init` blocks — the
+  storefront's server, edge and browser configs, Eve, and Flue — so nothing from
+  an outbound call to OpenRouter, Slack or GitHub is collected. The SDK redacts
+  keys whose name matches its sensitive-key denylist, but that is a denylist,
+  not a guarantee. Each category is written out explicitly: supplying
+  `dataCollection` at all switches the baseline to the SDK's defaults, which are
+  all-on.
+- Session Replay is the exception, and only in the storefront browser. It
+  records the rendered page with `maskAllText: false` and `blockAllMedia: false`,
+  so the assistant's replies, product cards and account details reach Sentry as
+  recorded DOM even when `SENTRY_AI_RECORD_OUTPUTS=false` keeps them off the
+  spans. The two switches cover span content, not the replay. Unmasking is safe
+  here because the only shopper is fictional; keep Replay's masking defaults in
+  an app with real customers.
 
 ## Setup
 
