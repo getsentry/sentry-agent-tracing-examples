@@ -30,8 +30,11 @@ jobs:
           SENTRY_TRACES_SAMPLE_RATE: "1"
           SENTRY_ENVIRONMENT: ci
           SENTRY_RELEASE: ${{ github.sha }}
-          SENTRY_AI_RECORD_INPUTS: "true"
-          SENTRY_AI_RECORD_OUTPUTS: "true"
+          # The diff and the review land on spans as prompt and response
+          # content. Off here because this workflow runs against a real
+          # repository; the local demo leaves them on.
+          SENTRY_AI_RECORD_INPUTS: "false"
+          SENTRY_AI_RECORD_OUTPUTS: "false"
           SENTRY_ACCESS_TOKEN: ${{ secrets.SENTRY_ACCESS_TOKEN }}
           SENTRY_ORG_SLUG: your-org-slug
           SENTRY_APP_PROJECT_SLUG: your-app-project-slug

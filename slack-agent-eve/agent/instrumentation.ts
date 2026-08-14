@@ -59,6 +59,8 @@ const slackProfileWaiters = new Map<string, Set<Sentry.Scope>>();
 
 const usersInfoSchema = z.looseObject({
   ok: z.boolean(),
+  // Slack reports `missing_scope` and friends here, with HTTP 200 and ok:false.
+  error: z.string().optional(),
   user: z
     .looseObject({
       name: z.string().optional(),
@@ -114,9 +116,10 @@ function trackSlackProfile(userId: string, scope: Sentry.Scope): void {
   })
     .then((response) => {
       const parsed = usersInfoSchema.safeParse(response);
-      if (!parsed.success || !parsed.data.ok) return;
+      if (!parsed.success) throw new Error("users.info returned an unrecognised shape");
+      if (!parsed.data.ok) throw new Error(`users.info failed: ${parsed.data.error ?? "unknown"}`);
       const user = parsed.data.user;
-      if (!user) return;
+      if (!user) throw new Error("users.info returned ok with no user");
       slackUserProfiles.set(userId, {
         username: user.profile?.display_name || user.profile?.real_name || user.name,
         email: user.profile?.email,

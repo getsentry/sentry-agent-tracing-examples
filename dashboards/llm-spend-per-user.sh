@@ -36,9 +36,47 @@ AI="gen_ai.operation.type:ai_client"
 # row in every group-by. The pair excludes it.
 present() { echo "has:$1 !$1:\"\""; }
 
+STATIC_DETECTOR="LLM spend rate high"
+ANOMALY_DETECTOR="LLM spend anomaly"
+
+# Every call below creates rather than updates, so a second run would leave a
+# duplicate dashboard and a second pair of detectors alerting on the same spend.
+named() {
+  NEEDLE="$1" python3 -c '
+import json, os, sys
+key = sys.argv[1]
+body = json.load(sys.stdin)
+rows = body if isinstance(body, list) else body.get("data", [])
+print("\n".join(str(r["id"]) for r in rows if r.get(key) == os.environ["NEEDLE"]))
+' "$2"
+}
+
+clashes=$(sentry api "/api/0/organizations/$ORG/dashboards/" | named "$TITLE" title)
+for name in "$STATIC_DETECTOR" "$ANOMALY_DETECTOR"; do
+  clashes="$clashes$(sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/" | named "$name" name)"
+done
+if [ -n "$clashes" ]; then
+  echo "$ORG/$PROJECT already has these; delete them or set TITLE= and rename the detectors:" >&2
+  echo "  dashboard \"$TITLE\", detectors \"$STATIC_DETECTOR\" / \"$ANOMALY_DETECTOR\"" >&2
+  exit 1
+fi
+
+# Widgets and detectors are separate calls, so a failure part way through would
+# otherwise leave a half-built dashboard behind.
+CREATED=()
+rollback() {
+  echo "==> failed; removing what this run created" >&2
+  for ((i = ${#CREATED[@]} - 1; i >= 0; i--)); do
+    sentry api "${CREATED[i]}" --method DELETE >/dev/null 2>&1 ||
+      echo "    could not delete ${CREATED[i]}" >&2
+  done
+}
+trap rollback ERR
+
 echo "==> creating dashboard on $ORG/$PROJECT"
 DASHBOARD_ID=$(sentry dashboard create "$ORG/$PROJECT" "$TITLE" --json |
   python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+CREATED+=("/api/0/organizations/$ORG/dashboards/$DASHBOARD_ID/")
 echo "    id $DASHBOARD_ID"
 
 echo "==> adding widgets"
@@ -89,8 +127,8 @@ print("," + json.dumps(out)[1:-1] if out else "")
 # still builds the older alert-rule payload, which newer orgs reject.
 # conditionResult is the issue priority: 75 critical, 50 warning, 0 resolved.
 echo "==> creating static spend detector"
-sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/" --method POST --data '{
-  "name": "LLM spend rate high",
+DETECTOR_ID=$(sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/" --method POST --data '{
+  "name": "'"$STATIC_DETECTOR"'",
   "type": "metric_issue",
   "dataSources": [{
     "type": "snuba_query_subscription",
@@ -110,13 +148,15 @@ sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/" --method POS
     ]
   },
   "config": {"detectionType": "static"}'"$routing"'
-}' | python3 -c 'import json,sys; d=json.load(sys.stdin); print("   ", d.get("id"), d.get("name"))'
+}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+CREATED+=("/api/0/organizations/$ORG/projects/$PROJECT/detectors/$DETECTOR_ID/")
+echo "    id $DETECTOR_ID  $STATIC_DETECTOR"
 
 # Same query, no thresholds: Sentry learns the normal shape of the hour and
 # opens an issue when spend leaves it.
 echo "==> creating anomaly spend detector"
-sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/" --method POST --data '{
-  "name": "LLM spend anomaly",
+DETECTOR_ID=$(sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/" --method POST --data '{
+  "name": "'"$ANOMALY_DETECTOR"'",
   "type": "metric_issue",
   "dataSources": [{
     "type": "snuba_query_subscription",
@@ -134,4 +174,8 @@ sentry api "/api/0/organizations/$ORG/projects/$PROJECT/detectors/" --method POS
     ]
   },
   "config": {"detectionType": "dynamic"}'"$routing"'
-}' | python3 -c 'import json,sys; d=json.load(sys.stdin); print("   ", d.get("id"), d.get("name"))'
+}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+CREATED+=("/api/0/organizations/$ORG/projects/$PROJECT/detectors/$DETECTOR_ID/")
+echo "    id $DETECTOR_ID  $ANOMALY_DETECTOR"
+
+trap - ERR
