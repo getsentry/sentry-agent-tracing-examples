@@ -10,16 +10,10 @@ Sentry.init({
   replaysSessionSampleRate: 1.0,
   replaysOnErrorSampleRate: 1.0,
   enableLogs: true,
-  // Same set as sentry.server.config.ts — see the note there for why each
-  // category is spelled out.
+  // Same set as sentry.server.config.ts. `userInfo` stays on, so ingest infers
+  // the visitor's IP and user agent — switch it off for real visitors.
   dataCollection: {
     genAI: GEN_AI_CONTENT_CAPTURE,
-    // In the browser this also sets the span envelope's `infer_ip` and
-    // `infer_user_agent` to "auto" (@sentry/core tracing/spans/envelope.js),
-    // so ingest fills in the visitor's IP. Fine for a demo storefront.
-    userInfo: true,
-    databaseQueryData: true,
-    frameContextLines: 5,
     httpHeaders: { request: false, response: false },
     httpBodies: [],
     cookies: false,

@@ -183,38 +183,17 @@ Sentry.init({
 	environment: process.env.SENTRY_ENVIRONMENT ?? process.env.NODE_ENV,
 	release: process.env.SENTRY_RELEASE,
 	tracesSampleRate,
-	// Supplying `dataCollection` at all switches the baseline from the
-	// sendDefaultPii bridge to the SDK's DEFAULTS, which turn every category on
-	// (@sentry/core resolveDataCollectionOptions). This demo has to supply it —
-	// gen_ai content is the whole point — so every other category is written
-	// out too: an omitted one would inherit that all-on baseline, not the
-	// conservative bridge. Same set in all three demos.
+	// Only the categories to switch off; the rest stay on. Inbound request
+	// bodies also need httpIntegration's maxIncomingRequestBodySize.
+	// https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/#dataCollection
+	// https://docs.sentry.io/platforms/javascript/guides/node/configuration/integrations/http/#maxincomingrequestbodysize
 	dataCollection: {
-		// One switch for gen_ai content capture — the integration reads these as
-		// its defaults, so no per-integration recordInputs/recordOutputs.
 		genAI: { inputs: recordInputs, outputs: recordOutputs },
-		// Covers only instrumentation-sourced user.* fields — the setUser call
-		// below names the GitHub actor either way, and that actor is a demo
-		// account.
-		userInfo: true,
-		databaseQueryData: true,
-		frameContextLines: 5,
-		// The transport layer, all off. Turning any of it on only redacts keys
-		// whose *name* matches a fixed substring denylist (SENSITIVE_KEY_SNIPPETS
-		// in @sentry/core filterKeyValueData) — so `authorization` is caught, but
-		// a vendor-specific key header or a body field named anything else is
-		// sent verbatim, and this harness calls GitHub and OpenRouter.
 		httpHeaders: { request: false, response: false },
 		httpBodies: [],
 		cookies: false,
 		urlQueryParams: false,
-		// `graphqlIntegration` is one of the Node SDK's defaults, but no
-		// `graphql` package is installed for it to patch, so this collects
-		// nothing today. Stated anyway, so the category is never inherited from
-		// the DEFAULTS baseline.
 		graphQL: { document: false, variables: false },
-		// Frame locals get no name filtering at all, and a frame in an API
-		// client holds whatever it was called with.
 		stackFrameVariables: false,
 	},
 	// Stream spans to Sentry as each one finishes, so gen_ai children that

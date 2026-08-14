@@ -6,13 +6,9 @@ Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
   tracesSampleRate: 1.0,
   enableLogs: true,
-  // Same set as sentry.server.config.ts — see the note there for why each
-  // category is spelled out.
+  // Same set as sentry.server.config.ts.
   dataCollection: {
     genAI: GEN_AI_CONTENT_CAPTURE,
-    userInfo: true,
-    databaseQueryData: true,
-    frameContextLines: 5,
     httpHeaders: { request: false, response: false },
     httpBodies: [],
     cookies: false,
