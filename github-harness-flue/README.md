@@ -25,9 +25,8 @@ All model calls route through OpenRouter (Flue's built-in `openrouter/…` provi
 credential needed is `OPENROUTER_API_KEY`). Sentry is wired via Flue's official integration
 (`src/sentry.ts`, described under [The Sentry bridge](#the-sentry-bridge) below):
 `Sentry.init` owns the global OpenTelemetry tracer provider and Flue's OTel GenAI adapter emits
-the spans. Because `flue run` never loads
-`app.ts`, the agent module imports `src/sentry.ts` itself. The CLI disposes instrumentation on
-exit, which awaits `Sentry.flush` — nothing is lost when the short-lived CI process ends.
+the spans. Because `flue run` never loads `app.ts`, the agent module imports `src/sentry.ts`
+itself. The CLI disposes instrumentation on exit, so the bridge can flush.
 
 ```
 src/agents/review.ts    review-lead agent + both subagents + tools + Sentry MCP connection
@@ -83,8 +82,9 @@ workflow-provided `GITHUB_TOKEN`.
 
 ## What you'll see in Sentry
 
-One trace per review, in the AI Agents dashboard. The span tree for a run against the fixture
-looks like this (turn count varies with the model's plan):
+One trace per review, in the AI Agents dashboard. The tree below is a local `npm run demo`
+against the fixture (turn count varies with the model's plan). The workflow tags its runs
+`environment: ci`.
 
 ```
 invoke_agent review-lead
@@ -106,8 +106,8 @@ invoke_agent review-lead
 Every `chat` span carries token usage and cost (priced from the raw OpenRouter model IDs); the
 `gen_ai.agent.name` on each span attributes usage to the lead vs. each subagent. The tools'
 `log.info` lines land in Sentry Logs, trace-correlated. A terminal failure (bad API key,
-unresolvable model) surfaces as one Sentry Issue, not one per nested operation it unwinds through.
-Issues and logs carry the same `flue.*` tag keys the spans carry as attributes
+unresolvable model) usually surfaces as one Sentry Issue, not one per nested operation it
+unwinds through. Issues and logs carry the same `flue.*` tag keys the spans carry as attributes
 (`flue.instance.id`, `flue.session.name`, …), plus the run's root `gen_ai.conversation.id`, so one
 search pivots across the run's spans, logs, and issues, and an issue links back to
 Explore > Conversations.
@@ -119,19 +119,19 @@ MCP tools trace like any other tool: each `mcp__sentry__*` call is an `execute_t
 their own short traces rather than under the agent trace.
 
 Prompt/response content on spans is controlled by `SENTRY_AI_RECORD_INPUTS` /
-`SENTRY_AI_RECORD_OUTPUTS`. Each direction is on unless you set it to `false`, so the demo shows
-full conversations out of the box. The pair feeds both `Sentry.init`'s `dataCollection.genAI` and
+`SENTRY_AI_RECORD_OUTPUTS`. Each direction is on unless you set it to `false`, so the local demo
+scripts show full conversations, while `github-workflow/review.yml` sets both to `false`. The
+pair feeds both `Sentry.init`'s `dataCollection.genAI` and
 the OTel adapter's own capture switch — the adapter reads no Sentry option, so it has to be told
 the same values. Whatever is recorded is scrubbed of sensitive keys and truncated to 16 KiB per
 attribute. `SENTRY_TRACES_SAMPLE_RATE` must be > 0 or you get errors and logs only; unset it
 defaults to 1, and a value outside 0–1 warns and falls back to 1.
 
-That gen_ai content is the only content this harness sends. The `Sentry.init` spells out every
-`dataCollection` category and keeps cookies, HTTP headers, HTTP bodies, URL query parameters and
-stack-frame variables off, so nothing from the calls to GitHub and OpenRouter is collected — the
-SDK's redaction of sensitive key names is a denylist, and frame locals are not filtered at all.
-The categories are written out rather than omitted: supplying `dataCollection` at all switches the
-baseline to the SDK's defaults, which turn every category on.
+That gen_ai content is the only content this harness sends. `Sentry.init` switches off cookies,
+HTTP headers, HTTP bodies, URL query parameters, GraphQL documents and variables, and stack-frame
+variables, so nothing from the calls to GitHub and OpenRouter is collected — the SDK's redaction of
+sensitive key names is a denylist, and frame locals are not filtered at all. Supplying
+`dataCollection` does not switch the unlisted categories off; they keep the SDK's defaults.
 
 ## The Sentry bridge
 
@@ -143,16 +143,16 @@ and nothing past that.
   `@flue/opentelemetry` adapter needs no exporter of its own. Sentry's provider integrations —
   the ones that patch the Anthropic, OpenAI or Vercel AI SDKs directly — are filtered out,
   because the adapter already emits one `chat` span per model turn and both would count it.
-- **AI views.** The adapter sets no `sentry.op`, so `beforeSendSpan` derives one from the span
-  name (`invoke_agent …` becomes `gen_ai.invoke_agent`). Without it the spans arrive as
-  `op:default` and stay out of the AI Agents views, the spend dashboard, and the AI detectors.
+- **AI views.** Spans stream to Sentry one at a time (`traceLifecycle: 'stream'`). That is the
+  ingest path that reads `gen_ai.operation.name` off a span and gives it a matching `gen_ai.*`
+  op, and that op is what puts the span in the AI Agents views.
 - **One review is one conversation.** A delegation opens a *child* conversation with its own id,
   and Sentry's Conversations view groups strictly by `gen_ai.conversation.id` — so one review
   would split into three rows. The bridge pins the first conversation of a submission as the
   root and writes it onto every span, keeping the child id as `flue.conversation.id`. It also
   restores each subagent's own name, which only `task_start` knows.
-- **Issues.** A terminal failure raises one issue, not one per nested operation as the error
-  unwinds. Each issue carries the same `flue.*` and `gen_ai.conversation.id` tags the spans
+- **Issues.** A terminal failure usually raises one issue, not one per nested operation as the
+  error unwinds. Each issue carries the same `flue.*` and `gen_ai.conversation.id` tags the spans
   carry, so one search term pivots between them.
 - **Logs.** Flue's log events and its submission-recovery events become Sentry Logs with those
   same tags, so a retry or reconciliation is searchable on its own rather than only surviving
@@ -160,5 +160,6 @@ and nothing past that.
 - **Content.** `SENTRY_AI_RECORD_INPUTS` and `SENTRY_AI_RECORD_OUTPUTS` drive both
   `dataCollection.genAI` and the adapter's own transform, which never see each other's config.
   Payloads are redacted by key name and capped at 16 KiB.
-- **Flush.** The bridge registers before the adapter, so the runtime disposes it after. Spans
-  are closed before the flush runs, not stranded in the buffer when a CI process ends.
+- **Flush.** The bridge registers before the adapter, so the runtime disposes it after. The
+  adapter closes its open spans, then the bridge awaits `Sentry.flush` with a 2 second cap. A
+  send that takes longer is not awaited.

@@ -74,16 +74,6 @@ const recordOutputs = envFlag('SENTRY_AI_RECORD_OUTPUTS', true);
 const DEFAULT_TRACES_SAMPLE_RATE = 1;
 const tracesSampleRate = resolveSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE);
 
-// The adapter sets no `sentry.op`, so its agent and tool spans reach Sentry as
-// op:default and stay out of the AI Agents views, the spend dashboard, and the
-// AI detectors. Derive the op from the span name the adapter builds, matching
-// the `gen_ai.<operation>` shape Sentry's own AI processors write.
-const GEN_AI_SPAN_OPS = [
-	['invoke_agent ', 'gen_ai.invoke_agent'],
-	['execute_tool ', 'gen_ai.execute_tool'],
-	['chat ', 'gen_ai.chat'],
-] as const;
-
 // Sentry ships integrations that patch AI provider SDKs directly. Flue's
 // instrumentation already emits one `chat` span per model turn, so those
 // integrations would double-count every model call.
@@ -196,26 +186,18 @@ Sentry.init({
 		graphQL: { document: false, variables: false },
 		stackFrameVariables: false,
 	},
-	// Stream spans to Sentry as each one finishes, so gen_ai children that
-	// complete after their parent span are not lost.
+	// Only streamed spans reach the ingest pipeline that derives `gen_ai.*` ops
+	// from span attributes.
+	// https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/#tracelifecycle
 	traceLifecycle: 'stream',
-	// TEMPORARY until withastro/flue#568 ships: the adapter parks non-object
-	// tool payloads on vendor `flue.tool.call.*` attributes, which Sentry's AI
-	// views don't read. The adapter writes one key or the other per payload
-	// (`setToolContent`), never both, so move rather than copy — a copy would
-	// send the same payload under two names.
+	// The adapter parks non-object tool payloads on vendor `flue.tool.call.*`
+	// attributes, which Sentry's AI views don't read (withastro/flue#568).
+	//
 	// withStreamedSpan is required — a bare callback silently downgrades
 	// traceLifecycle to 'static'.
 	beforeSendSpan: Sentry.withStreamedSpan((span) => {
 		const attributes = span.attributes;
 		if (attributes) {
-			if (attributes['sentry.op'] === undefined) {
-				// A throw here would drop the span, so never trust the name to be set.
-				const name = span.name ?? '';
-				const op = GEN_AI_SPAN_OPS.find(([prefix]) => name.startsWith(prefix));
-				if (op !== undefined) attributes['sentry.op'] = op[1];
-			}
-
 			for (const kind of ['arguments', 'result'] as const) {
 				const raw = attributes[`flue.tool.call.${kind}`];
 				if (raw !== undefined) {
@@ -256,7 +238,8 @@ Sentry.init({
 });
 
 // Explore > Conversations takes its User column from the span's scope. In CI
-// the actor is the GitHub identity that triggered the run.
+// the actor is the GitHub identity that triggered the run; every local run
+// shows as 'local'.
 const actor = process.env.GITHUB_ACTOR ?? 'local';
 Sentry.setUser({ id: actor, username: actor });
 
@@ -266,9 +249,6 @@ Sentry.setUser({ id: actor, username: actor });
 // before this bridge's flush is even called. The other order flushes first and
 // strands those spans in the client's buffer on an abort, interrupt, or crash.
 instrument({
-	// Keyed registration: on a dev reload this module re-evaluates while the
-	// runtime's registry persists, and the newest install wins — the previous
-	// bridge is disposed, so no event is ever double-reported.
 	key: Symbol.for('flue.sentry.bridge'),
 	observe(event) {
 		// Runs before the branches below so the maps are populated while the
@@ -328,9 +308,7 @@ instrument({
 // span attributes. The `logger` seam below is wired, so the adapter's
 // `gen_ai.client.operation.exception` records (a model call that failed and was
 // retried) land in Sentry Logs. Content capture is on by default in the
-// adapter; `contentPolicy()` narrows it per direction and redacts. The
-// instrumentation is keyed, so a dev reload replaces the previous registration
-// instead of stacking a duplicate.
+// adapter; `contentPolicy()` narrows it per direction and redacts.
 if (tracesSampleRate > 0) {
 	instrument(
 		createOpenTelemetryInstrumentation({
