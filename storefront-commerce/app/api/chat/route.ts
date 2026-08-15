@@ -42,8 +42,8 @@ export async function POST(req: Request) {
   if (id) {
     Sentry.setConversationId(id);
     // setConversationId only reaches gen_ai spans (it registers a spanStart
-    // handler). The tag puts the same id on the errors and transactions of
-    // this request, which is what makes an issue searchable back to its chat.
+    // handler). The tag puts the same id on this request's errors, which is
+    // what makes an issue searchable back to its chat.
     Sentry.getIsolationScope().setTag("gen_ai.conversation.id", id);
   }
 

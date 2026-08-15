@@ -6,20 +6,12 @@ Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
   // Sample every trace — this is a demo; dial down for real traffic.
   tracesSampleRate: 1.0,
+  // The v11 default, and the one that suits agent tracing: each span is sent on
+  // its own, so a failed tool span keeps its failure reason instead of being
+  // rebuilt from a finished transaction.
+  // https://github.com/getsentry/sentry-agent-tracing-examples/issues/15
+  traceLifecycle: "stream",
   enableLogs: true,
-  // Page renders and server actions never call Sentry.setUser, so they fall
-  // back to the signed-in shopper. A fallback and not `initialScope`, because
-  // initialScope lands on the scope a root span captures, which is merged
-  // after the isolation scope Sentry.setUser writes to — it would silently
-  // overwrite the per-request shopper the chat route resolved.
-  beforeSend(event) {
-    if (!event.user?.id) event.user = DEMO_USER;
-    return event;
-  },
-  beforeSendTransaction(event) {
-    if (!event.user?.id) event.user = DEMO_USER;
-    return event;
-  },
   // In-app stack frames: under `next dev` (Turbopack) the SDK misclassifies
   // them and ingest overrides any client-side correction. Stack Trace Rules
   // (Settings → Issue Grouping) fix it, but they rewrite deployed events too.
@@ -38,10 +30,9 @@ Sentry.init({
     graphQL: { document: false, variables: false },
     stackFrameVariables: false,
   },
-  integrations: [
-    // Turns the AI SDK's telemetry into gen_ai.* agent spans. ai >= 7 publishes
-    // on the `ai:telemetry` diagnostics channel this integration subscribes to,
-    // so no bundling or module-patching options are needed.
-    Sentry.vercelAIIntegration(),
-  ],
 });
+
+// Page renders and server actions never call Sentry.setUser, so they fall back
+// to the signed-in shopper. The global scope is the base every event and span
+// merges onto, so the chat route's per-request setUser still wins.
+Sentry.getGlobalScope().setUser(DEMO_USER);

@@ -32,8 +32,8 @@ Built on the [Next.js Commerce](https://github.com/vercel/commerce) template
 - **Shopper** — the store has no sign-in, so `lib/demo-user` holds the one
   fictional customer the browser is signed in as. Every Sentry error, trace,
   and replay carries them as the user.
-- **Sentry** — `@sentry/nextjs` with `vercelAIIntegration`, which turns the AI
-  SDK's telemetry into `gen_ai.*` agent spans. `dataCollection` in the three
+- **Sentry** — `@sentry/nextjs`, which loads `vercelAIIntegration` on its own
+  and turns the AI SDK's telemetry into `gen_ai.*` agent spans. `dataCollection` in the three
   `Sentry.init` files decides what is kept from them (prompts, completions,
   tool payloads); `SENTRY_AI_RECORD_INPUTS` / `SENTRY_AI_RECORD_OUTPUTS` switch
   the prompt and response half of that for server and browser — edge's copy is

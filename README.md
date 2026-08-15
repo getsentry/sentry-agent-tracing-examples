@@ -52,17 +52,18 @@ Whoever emits the `gen_ai.*` spans decides every other tracing setting. Two
 emitters produce two span trees for one run, each carrying `gen_ai.usage.*`, so
 every token is counted twice in the spend dashboard and the AI detectors.
 
-| App | Emitter | Sentry AI integrations | `traceLifecycle` |
-| --- | --- | --- | --- |
-| `storefront-commerce` | Sentry's `vercelAIIntegration()` | on — it is the emitter | default (`static`) |
-| `slack-agent-eve` | Eve's `@ai-sdk/otel` | `VercelAI` filtered off | `stream` |
-| `github-harness-flue` | `@flue/opentelemetry` | all seven filtered off | `stream` |
+| App | Emitter | Sentry AI integrations |
+| --- | --- | --- |
+| `storefront-commerce` | Sentry's `vercelAIIntegration()` | on by default — it is the emitter |
+| `slack-agent-eve` | Eve's `@ai-sdk/otel` | `VercelAI` filtered off |
+| `github-harness-flue` | `@flue/opentelemetry` | all seven filtered off |
 
-A third-party OpenTelemetry emitter forces `traceLifecycle: "stream"`. Sentry's
-own integrations set `span.op` to `gen_ai.*` themselves; a third-party adapter
-sets `gen_ai.operation.name` and never `sentry.op`, and the static path only
-lifts out spans whose op is already `gen_ai.*`. Streamed spans instead reach the
-ingest pipeline that derives the op from the attribute.
+All three set `traceLifecycle: "stream"`, the default from v11. Use it for agent
+tracing: `static` rebuilds each `gen_ai.*` span from a finished transaction and
+drops the failure reason, so a failed tool call arrives with `span.status:
+error` and an empty `span.status.message`. It also means `beforeSendTransaction`
+and `ignoreTransactions` are never called — use `beforeSendSpan` and
+`ignoreSpans`.
 
 ## Setup
 
