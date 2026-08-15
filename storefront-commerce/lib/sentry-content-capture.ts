@@ -7,8 +7,9 @@
 // time and the browser half reads the mirror. Both names are written out as
 // static member expressions because the bundler substitutes them literally — a
 // computed `process.env[name]` lookup resolves to nothing in the browser.
-// Server and edge keep reading the unprefixed names first, so restarting with
-// a different value takes effect without a rebuild.
+// Server and edge keep reading the unprefixed names first, so a local restart
+// applies a new value. The browser value is inlined at build time, so a
+// deployment applies a new value only after a rebuild.
 
 const DISABLED_FLAG_VALUES = new Set(["false", "0", "no", "off"]);
 

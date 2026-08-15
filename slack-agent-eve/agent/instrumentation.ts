@@ -38,12 +38,6 @@ function envRate(name: string, fallback: number): number {
 const recordInputs = envFlag("SENTRY_AI_RECORD_INPUTS", true);
 const recordOutputs = envFlag("SENTRY_AI_RECORD_OUTPUTS", true);
 
-const GEN_AI_SPAN_OPS = [
-  ["invoke_agent ", "gen_ai.invoke_agent"],
-  ["execute_tool ", "gen_ai.execute_tool"],
-  ["chat ", "gen_ai.chat"],
-] as const;
-
 interface SlackUserProfile {
   username?: string;
   email?: string;
@@ -148,7 +142,7 @@ export default defineInstrumentation({
   functionId: AGENT_NAME,
   // Runs at server startup, before any agent code. Sentry.init registers a
   // global OpenTelemetry tracer provider, so eve's AI SDK telemetry spans
-  // (ai.eve.turn > ai.streamText > ai.toolCall) flow straight into Sentry.
+  // (ai.eve.turn > ai.streamText > ai.toolCall) go to Sentry's exporter.
   setup: () => {
     Sentry.init({
       dsn: process.env.SENTRY_DSN,
@@ -157,6 +151,15 @@ export default defineInstrumentation({
       // to a deploy, or resolve suspect commits.
       release: process.env.SENTRY_RELEASE ?? process.env.VERCEL_GIT_COMMIT_SHA,
       tracesSampleRate: envRate("SENTRY_TRACES_SAMPLE_RATE", 1.0),
+      // Vercel Workflow's own spans for calls the http and fetch integrations
+      // already cover. These are the names eve sets; Sentry rewrites them to
+      // `METHOD target` after this test runs.
+      ignoreSpans: [
+        { name: "workflow.route.flow" },
+        { name: /^http (GET|POST|PUT|PATCH|DELETE|HEAD)$/ },
+        { name: "workflow.stream.write" },
+        { name: "workflow.stream.read.connect" },
+      ],
       // Only the categories to switch off; the rest stay on. Inbound request
       // bodies also need httpIntegration's maxIncomingRequestBodySize.
       // https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/#dataCollection
@@ -170,75 +173,47 @@ export default defineInstrumentation({
         graphQL: { document: false, variables: false },
         stackFrameVariables: false,
       },
-      // Default segment export, which sends a turn's spans while the request
-      // is still open — required on Vercel, where the function freezes as soon
-      // as it responds and anything still buffered is lost. This only works
-      // because eve >= 0.32 marks each step's restored context remote
-      // (vercel/eve#1855), so every step forms its own exportable segment.
+      // Only streamed spans reach the ingest pipeline that derives `gen_ai.*`
+      // ops from span attributes.
+      // https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/#tracelifecycle
+      traceLifecycle: "stream",
+      // The trace record wins over the conversation id already on the span:
+      // eve opens the turn span before step.started runs, so it can arrive
+      // carrying the previous turn's id.
       //
-      // A step's spans can still be created outside the isolation scope that
-      // setConversationId below writes to, so the conversation id is settled
-      // here as well, looked up by the turn's trace id — the one key this
-      // callback and step.started share, and the reason a local TUI turn is
-      // not labelled with the Slack turn before it.
-      //
-      // The trace record wins over whatever is already on the span, and an
-      // already-stamped span is inspected even when its op says nothing about
-      // gen_ai. Both are needed because eve opens the turn span before
-      // step.started runs: the SDK's ConversationId integration stamps that
-      // span at spanStart (its raw name `ai.eve.turn` matches the "ai." rule)
-      // from an isolation scope this turn has not corrected yet, so it can
-      // arrive here carrying the previous turn's thread under the description
-      // `eve.turn` and op `default`. Assigning `undefined` drops the key when
-      // the turn has no thread.
-      beforeSendSpan: (span) => {
-        // eve's spans arrive with no op of their own. Ingest normalises the
-        // model-call ones to `gen_ai`, but leaves agent and tool spans at
-        // `default`, so all three are derived here to the `gen_ai.<operation>`
-        // shape Sentry's own AI processors write. Drop this once ingest covers
-        // agent and tool spans too.
-        if (span.op === undefined || span.op === "default") {
-          const derived = GEN_AI_SPAN_OPS.find(([prefix]) =>
-            span.description?.startsWith(prefix),
-          );
-          if (derived !== undefined) span.op = derived[1];
-        }
+      // withStreamedSpan is required — a bare callback silently downgrades
+      // traceLifecycle to 'static'.
+      beforeSendSpan: Sentry.withStreamedSpan((span) => {
+        const attributes = span.attributes;
+        if (!attributes) return span;
         // eve names its agent span after the model it called, not the agent.
-        if (span.op === "gen_ai.invoke_agent") {
-          span.description = `invoke_agent ${AGENT_NAME}`;
-          span.data["gen_ai.agent.name"] = AGENT_NAME;
+        if (span.name.startsWith("invoke_agent ")) {
+          span.name = `invoke_agent ${AGENT_NAME}`;
+          attributes["gen_ai.agent.name"] = AGENT_NAME;
         }
         const conv = conversationForTrace(span.trace_id);
         if (!conv) return span;
         const isConversationSpan =
-          span.data["gen_ai.conversation.id"] !== undefined ||
-          span.op?.startsWith("gen_ai") ||
-          /^(chat|generate_content|invoke_agent|execute_tool|embed) /.test(span.description ?? "");
+          attributes["gen_ai.conversation.id"] !== undefined ||
+          attributes["gen_ai.operation.name"] !== undefined ||
+          /^(chat|generate_content|invoke_agent|execute_tool|embed) /.test(span.name);
         if (!isConversationSpan) return span;
-        span.data["gen_ai.conversation.id"] = conv.threadTs;
-        if (conv.userId) span.data["user.id"] = conv.userId;
+        attributes["gen_ai.conversation.id"] = conv.conversationId;
+        if (conv.userId) attributes["user.id"] = conv.userId;
         return span;
-      },
+      }),
       // Logs are domain wide events only (meal.option.presented and
       // meal.pick.added in the tools) — the mechanical record (tool args,
       // tokens, models) already lives on the auto-instrumented spans; logs
       // add the business layer spans can't carry.
       enableLogs: envFlag("SENTRY_ENABLE_LOGS", true),
-      // The VercelAI integration is a default one, and on this stack it is the
-      // wrong producer. eve declares its own telemetry, which registers
-      // @ai-sdk/otel and emits the full tree — so the integration's
-      // diagnostics-channel subscriber opens a *second* gen_ai.* tree for the
-      // same work, as a sibling of eve's under the same parent. The two are
-      // not equivalent: eve's spans are the ones the model and tool HTTP calls
-      // hang off, and the subscriber's copies are leaves. Both carry
-      // gen_ai.operation.type:ai_client and identical gen_ai.usage.*, so
-      // keeping both doubles every token in the spend dashboard and the AI
-      // detectors.
-      //
-      // eve's telemetry cannot be switched off — `otelSettings` gates both
-      // @ai-sdk/otel registration and eve's own tracer, and it is set by the
-      // presence of this file (there is no isEnabled toggle) — so the
-      // integration is what has to go.
+      // eve registers @ai-sdk/otel itself and emits the full gen_ai.* tree.
+      // VercelAI, a default integration, subscribes to the same telemetry over
+      // the ai:telemetry channel and opens a second tree beside it, carrying
+      // the same gen_ai.usage.* — which doubles every token in the spend
+      // dashboard and the AI detectors. eve's telemetry has no off switch
+      // (`otelSettings` is enabled by this file existing), so this is the copy
+      // that goes.
       integrations: (defaults) =>
         defaults.filter((integration) => integration.name !== "VercelAI"),
     });
@@ -248,18 +223,17 @@ export default defineInstrumentation({
   // so one setting governs content capture end to end.
   recordInputs,
   recordOutputs,
-  // Wraps inbound Slack webhook requests in a SERVER span so each trace starts
-  // at the HTTP edge instead of at the model call.
-  traceChannelRequests: true,
+  // httpIntegration already covers the HTTP edge, so enabling this pairs a
+  // second SERVER span with each inbound request. It is the only cover for the
+  // SSE stream route, which httpIntegration does not span — a trade this demo
+  // declines to keep one span per request.
+  traceChannelRequests: false,
   events: {
     "step.started"(input) {
-      // Only a turn's first step arrives with kind channel:slack; the
-      // continuation steps after each tool result are delivered through
-      // eve's internal workflow queue with a different channel kind, so
-      // their identity is cached per session — otherwise every span after
-      // step 1 loses its conversation id and Explore > Conversations shows
-      // only the beginning of each turn. In-process cache, keyed by session
-      // and never pruned: one small entry per session for the process's life.
+      // Only a turn's first step arrives with kind channel:slack — the
+      // continuation steps after each tool result come through eve's internal
+      // workflow queue — so the Slack identity is cached per session. Without
+      // the cache every span after step 1 loses its thread and user.
       let identity: SlackIdentity | undefined;
       if (isChannel(input.channel, slack)) {
         const { channelId, threadTs, triggeringUserId } = input.channel.metadata;
@@ -275,32 +249,33 @@ export default defineInstrumentation({
       const channelId = identity?.channelId;
       const threadTs = identity?.threadTs;
       const userId = identity?.userId;
+      // One eve session is one Slack thread or one local conversation, across
+      // every turn in it; a delegated subagent runs in its own session, so the
+      // root is what keeps a delegation in the conversation that started it.
+      const conversationId =
+        threadTs ?? input.session.parent?.rootSessionId ?? input.session.id;
       // This callback runs on the same execution path as the step's model
       // call, so isolation-scope state set here lands on the AI spans that
-      // follow. The Slack thread is the conversation: setConversationId stamps
-      // gen_ai.conversation.id on every AI span (grouping the thread in
-      // Explore > Conversations) and setUser fills that view's User column.
-      // The matching tag puts the same id on error events, which carry tags
-      // rather than span attributes.
+      // follow: setConversationId stamps gen_ai.conversation.id on each one
+      // (grouping the conversation in Explore > Conversations), the tag puts
+      // the same id on error events, which carry tags rather than span
+      // attributes, and setUser fills that view's User column.
       //
-      // Every step rewrites all of it, the empty case included: one process
+      // Every step rewrites all of it, the empty user included: one process
       // serves both Slack and the local TUI, and an isolation scope outlives
-      // the turn that wrote to it, so anything left set here would label the
-      // next turn with this one's thread and user.
+      // the turn that wrote to it.
       const isolationScope = Sentry.getIsolationScope();
-      Sentry.setConversationId(threadTs ?? null);
-      isolationScope.setTag("gen_ai.conversation.id", threadTs);
+      Sentry.setConversationId(conversationId);
+      isolationScope.setTag("gen_ai.conversation.id", conversationId);
       if (userId === undefined) isolationScope.setUser(null);
       else trackSlackProfile(userId, isolationScope);
       // Handoff for beforeSendSpan above, which may run in eve's replay
       // context (separate module instance) where this scope isn't reachable.
-      // A turn with no thread is recorded too — that record is what lets
-      // beforeSendSpan strip a conversation id stamped before this ran.
-      //
-      // The channel id rides along for a second reader: it is the only
-      // trusted destination the card tools have (activeSlackThread).
+      // The channel id rides along for a second reader: it is the only trusted
+      // destination the card tools have (activeSlackThread).
       const traceId = activeTraceId();
-      if (traceId !== undefined) rememberConversation(traceId, { channelId, threadTs, userId });
+      if (traceId !== undefined)
+        rememberConversation(traceId, { conversationId, channelId, threadTs, userId });
       if (identity === undefined) return undefined;
       return {
         runtimeContext: {

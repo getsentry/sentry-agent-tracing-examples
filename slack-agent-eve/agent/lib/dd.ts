@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as Sentry from "@sentry/node";
-import { Sandbox } from "@vercel/sandbox";
+import { APIError, Sandbox } from "@vercel/sandbox";
 import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
@@ -89,13 +89,11 @@ function ddCliSandbox(): Promise<Sandbox> {
   return sandboxPromise;
 }
 
-async function runDdInSandbox(argv: string[]): Promise<string> {
-  const token = process.env.DD_CLI_ACCESS_TOKEN;
-  if (!token) {
-    throw new Error(
-      "DD_CLI_ACCESS_TOKEN is not set — mint one with `dd-cli export-token` and add it to the deployment's environment.",
-    );
-  }
+function sandboxIsGone(error: unknown): boolean {
+  return error instanceof APIError && error.response.status === 410;
+}
+
+async function execDd(argv: string[], token: string): Promise<string> {
   const sandbox = await ddCliSandbox();
   // Args go through "$@" rather than the command string so the multi-line
   // --intent value can't be re-split by the shell.
@@ -108,6 +106,25 @@ async function runDdInSandbox(argv: string[]): Promise<string> {
     throw new Error(`dd-cli ${argv[1]} failed in sandbox: ${await result.stderr()}`);
   }
   return result.stdout();
+}
+
+async function runDdInSandbox(argv: string[]): Promise<string> {
+  const token = process.env.DD_CLI_ACCESS_TOKEN;
+  if (!token) {
+    throw new Error(
+      "DD_CLI_ACCESS_TOKEN is not set — mint one with `dd-cli export-token` and add it to the deployment's environment.",
+    );
+  }
+  try {
+    return await execDd(argv, token);
+  } catch (error) {
+    // The SDK resumes a stopped session by itself, but a sandbox Vercel has
+    // already reclaimed cannot be resumed — it has to be built again, and the
+    // cached handle a warm function instance holds would keep failing.
+    if (!sandboxIsGone(error)) throw error;
+    sandboxPromise = undefined;
+    return execDd(argv, token);
+  }
 }
 
 async function runDdLocally(argv: string[]): Promise<string> {

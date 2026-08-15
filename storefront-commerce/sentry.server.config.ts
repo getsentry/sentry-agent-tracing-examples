@@ -20,10 +20,9 @@ Sentry.init({
     if (!event.user?.id) event.user = DEMO_USER;
     return event;
   },
-  // Note on stack-trace in-app frames: under `next dev` (Turbopack) the SDK
-  // misclassifies frames and Sentry ingest overrides any client-side
-  // correction, so the fix lives in the project's Stack Trace Rules
-  // (Settings → Issue Grouping), not here. See
+  // In-app stack frames: under `next dev` (Turbopack) the SDK misclassifies
+  // them and ingest overrides any client-side correction. Stack Trace Rules
+  // (Settings → Issue Grouping) fix it, but they rewrite deployed events too.
   // https://github.com/getsentry/sentry-javascript/issues/23176
 
   // Only the categories to switch off; the rest stay on. Inbound request

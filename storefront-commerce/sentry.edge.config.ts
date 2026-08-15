@@ -1,3 +1,6 @@
+// The demo has no middleware and no edge routes, so nothing runs here. Kept in
+// step with the other two configs for when an edge route is added.
+
 import * as Sentry from "@sentry/nextjs";
 import { DEMO_USER } from "lib/demo-user";
 import { GEN_AI_CONTENT_CAPTURE } from "lib/sentry-content-capture";

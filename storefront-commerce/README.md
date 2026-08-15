@@ -36,12 +36,13 @@ Built on the [Next.js Commerce](https://github.com/vercel/commerce) template
   SDK's telemetry into `gen_ai.*` agent spans. `dataCollection` in the three
   `Sentry.init` files decides what is kept from them (prompts, completions,
   tool payloads); `SENTRY_AI_RECORD_INPUTS` / `SENTRY_AI_RECORD_OUTPUTS` switch
-  the prompt and response half of that for server, edge, and browser at once,
-  and are on when unset. The three files spell out every `dataCollection`
-  category and keep cookies, headers, bodies, query parameters and stack-frame
-  variables off — supplying the key at all switches the baseline to the SDK's
-  all-on defaults, so omitting a category is not the safe move. The chat route
-  also sets the Sentry user and
+  the prompt and response half of that for server and browser — edge's copy is
+  present but never runs — and are on when unset. The three files spell out
+  the categories to switch off: headers, bodies, cookies, query params,
+  GraphQL, and stack-frame variables. `databaseQueryData` stays on at its
+  default, so `db.query` spans keep their parameters and results; supplying
+  the key at all switches the baseline to the SDK's all-on defaults, so
+  omitting a category is not safe. The chat route also sets the Sentry user and
   conversation ID so multi-turn chats group in **Explore → Conversations**, and
   the browser records a session replay for every session. The replay is
   unmasked, so it carries the rendered answers and account details whatever the
@@ -61,7 +62,8 @@ cp .env.example .env.local   # then fill in:
 ```
 
 Everything else in `.env.example` is optional (model override, source map
-upload, branding). The build itself needs no env vars at all.
+upload, branding). A deployment needs `SENTRY_AUTH_TOKEN`, which uploads
+source maps — without it, stack traces in Sentry stay minified.
 
 ## Run
 
@@ -105,7 +107,9 @@ POST /api/chat                                          http.server
 
 Storefront page loads produce ordinary Next.js traces whose `db.query` spans
 come from the same fake database — so the demo also shows classic tracing
-alongside agent tracing.
+alongside agent tracing. Under `next dev` every navigation re-renders and
+queries. A production build serves cached pages, so the same navigation can
+produce no `db.query` spans.
 
 ## Choosing a model
 

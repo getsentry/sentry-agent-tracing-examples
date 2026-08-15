@@ -18,12 +18,11 @@
 
 import * as Sentry from "@sentry/node";
 
-// A recorded turn with no `threadTs` is a turn that has no Slack conversation
-// (the local TUI, `eve invoke`). It is recorded rather than deleted so that
-// beforeSendSpan can tell "this turn is not a Slack thread" apart from "this
-// trace is unknown", and strip a `gen_ai.conversation.id` an earlier turn left
-// on the isolation scope the SDK stamps from.
+// A turn with no `threadTs` came from somewhere other than Slack (the local
+// TUI, `eve invoke`). It still has a conversation: `conversationId` falls back
+// to eve's session id, which covers every turn of one CLI conversation.
 export interface Conversation {
+  conversationId: string;
   channelId?: string;
   threadTs?: string;
   userId?: string;
