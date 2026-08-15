@@ -187,9 +187,10 @@ export default defineInstrumentation({
         const attributes = span.attributes;
         if (!attributes) return span;
         // eve names its agent span after the model it called, not the agent.
+        // The attribute holds the real one, including a delegated subagent's.
         if (span.name.startsWith("invoke_agent ")) {
-          span.name = `invoke_agent ${AGENT_NAME}`;
-          attributes["gen_ai.agent.name"] = AGENT_NAME;
+          const agent = attributes["gen_ai.agent.name"];
+          span.name = `invoke_agent ${typeof agent === "string" ? agent : AGENT_NAME}`;
         }
         const conv = conversationForTrace(span.trace_id);
         if (!conv) return span;

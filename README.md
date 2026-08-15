@@ -46,6 +46,24 @@ project — there is no workspace root.
   here because the only shopper is fictional; keep Replay's masking defaults in
   an app with real customers.
 
+## One emitter per app
+
+Whoever emits the `gen_ai.*` spans decides every other tracing setting. Two
+emitters produce two span trees for one run, each carrying `gen_ai.usage.*`, so
+every token is counted twice in the spend dashboard and the AI detectors.
+
+| App | Emitter | Sentry AI integrations | `traceLifecycle` |
+| --- | --- | --- | --- |
+| `storefront-commerce` | Sentry's `vercelAIIntegration()` | on — it is the emitter | default (`static`) |
+| `slack-agent-eve` | Eve's `@ai-sdk/otel` | `VercelAI` filtered off | `stream` |
+| `github-harness-flue` | `@flue/opentelemetry` | all seven filtered off | `stream` |
+
+A third-party OpenTelemetry emitter forces `traceLifecycle: "stream"`. Sentry's
+own integrations set `span.op` to `gen_ai.*` themselves; a third-party adapter
+sets `gen_ai.operation.name` and never `sentry.op`, and the static path only
+lifts out spans whose op is already `gen_ai.*`. Streamed spans instead reach the
+ingest pipeline that derives the op from the attribute.
+
 ## Setup
 
 ```bash
