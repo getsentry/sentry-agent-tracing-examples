@@ -12,11 +12,6 @@ Sentry.init({
   // https://github.com/getsentry/sentry-agent-tracing-examples/issues/15
   traceLifecycle: "stream",
   enableLogs: true,
-  // In-app stack frames: under `next dev` (Turbopack) the SDK misclassifies
-  // them and ingest overrides any client-side correction. Stack Trace Rules
-  // (Settings → Issue Grouping) fix it, but they rewrite deployed events too.
-  // https://github.com/getsentry/sentry-javascript/issues/23176
-
   // Only the categories to switch off; the rest stay on. Inbound request
   // bodies also need httpIntegration's maxIncomingRequestBodySize.
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#dataCollection

@@ -7,9 +7,6 @@ Sentry.init({
   // Sample every trace and record every session — this is a demo; dial down
   // for real traffic.
   tracesSampleRate: 1.0,
-  // Same lifecycle as the server, so both halves of a trace serialize the same
-  // way. https://github.com/getsentry/sentry-agent-tracing-examples/issues/15
-  traceLifecycle: "stream",
   replaysSessionSampleRate: 1.0,
   replaysOnErrorSampleRate: 1.0,
   enableLogs: true,

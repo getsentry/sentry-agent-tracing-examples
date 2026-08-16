@@ -10,7 +10,6 @@ import {
 import { resolveModel } from "lib/ai/models";
 import { createTools, type AssistantUIMessage } from "lib/ai/tools";
 import { DEMO_USER } from "lib/demo-user";
-import { GEN_AI_CONTENT_CAPTURE } from "lib/sentry-content-capture";
 
 export const maxDuration = 30;
 
@@ -55,15 +54,9 @@ export async function POST(req: Request) {
     messages: await convertToModelMessages(messages),
     tools: createTools(DEMO_USER.id, id),
     stopWhen: isStepCount(5),
-    // functionId names the agent in Sentry's AI Agents dashboard. The AI SDK
-    // emits prompts and completions on its telemetry channel, and
-    // dataCollection.genAI decides what Sentry keeps of them; both sides read
-    // the same pair so a disabled direction is never emitted in the first
-    // place.
+    // functionId names the agent in Sentry's AI Agents dashboard.
     telemetry: {
       functionId: "shopping-assistant",
-      recordInputs: GEN_AI_CONTENT_CAPTURE.inputs,
-      recordOutputs: GEN_AI_CONTENT_CAPTURE.outputs,
     },
     // streamText resolves rather than throws when the model or the provider
     // fails, and Sentry's vercel-ai subscriber only fails the span, so without
