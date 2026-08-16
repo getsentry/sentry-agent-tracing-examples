@@ -15,16 +15,6 @@ const nextConfig: NextConfig = {
   images: {
     formats: ["image/avif", "image/webp"],
   },
-  // The browser runs Sentry.init too, and Next inlines only NEXT_PUBLIC_*
-  // names there. Mirroring the pair keeps one operator-facing setting for all
-  // three runtimes; the values are booleans about span content, so the mirror
-  // publishes nothing the recorded spans do not already show.
-  env: {
-    NEXT_PUBLIC_SENTRY_AI_RECORD_INPUTS:
-      process.env.SENTRY_AI_RECORD_INPUTS ?? "true",
-    NEXT_PUBLIC_SENTRY_AI_RECORD_OUTPUTS:
-      process.env.SENTRY_AI_RECORD_OUTPUTS ?? "true",
-  },
 };
 
 export default withSentryConfig(nextConfig, {

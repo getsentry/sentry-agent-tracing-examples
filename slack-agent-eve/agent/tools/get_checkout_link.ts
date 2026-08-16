@@ -36,7 +36,7 @@ export default defineTool({
     const attributes: CheckoutOfferedLog = { "meal.store": storeName };
     if (total != null) attributes["meal.total"] = total;
     if (currency) attributes["meal.currency"] = currency;
-    if (conv?.threadTs) attributes["gen_ai.conversation.id"] = conv.threadTs;
+    if (conv?.conversationId) attributes["gen_ai.conversation.id"] = conv.conversationId;
     if (conv?.userId) attributes["user.id"] = conv.userId;
     Sentry.logger.info("meal.checkout.offered", attributes);
 

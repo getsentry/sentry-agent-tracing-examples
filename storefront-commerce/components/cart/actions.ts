@@ -1,7 +1,6 @@
 "use server";
 
 import * as Sentry from "@sentry/nextjs";
-import { DEMO_USER } from "lib/demo-user";
 import { TAGS } from "lib/constants";
 import {
   addToCart,
@@ -106,7 +105,6 @@ export async function updateItemQuantity(
     Sentry.logger.info("commerce.cart.updated", {
       "commerce.merchandise_id": merchandiseId,
       "commerce.quantity": quantity,
-      "user.id": DEMO_USER.id,
     });
   } catch (e) {
     Sentry.captureException(e);

@@ -175,7 +175,6 @@ export function createTools(customerId: string, conversationId?: string) {
           "commerce.amount": order.total.amount,
           "commerce.currency": order.total.currencyCode,
           "gen_ai.conversation.id": conversationId,
-          "user.id": customerId,
         });
 
         return {

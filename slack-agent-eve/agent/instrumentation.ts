@@ -147,9 +147,6 @@ export default defineInstrumentation({
     Sentry.init({
       dsn: process.env.SENTRY_DSN,
       environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? "development",
-      // Without a release Sentry cannot mark regressions, attribute an issue
-      // to a deploy, or resolve suspect commits.
-      release: process.env.SENTRY_RELEASE ?? process.env.VERCEL_GIT_COMMIT_SHA,
       tracesSampleRate: envRate("SENTRY_TRACES_SAMPLE_RATE", 1.0),
       // Vercel Workflow's own spans for calls the http and fetch integrations
       // already cover. These are the names eve sets; Sentry rewrites them to
@@ -165,7 +162,6 @@ export default defineInstrumentation({
       // https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/#dataCollection
       // https://docs.sentry.io/platforms/javascript/guides/node/configuration/integrations/http/#maxincomingrequestbodysize
       dataCollection: {
-        genAI: { inputs: recordInputs, outputs: recordOutputs },
         httpHeaders: { request: false, response: false },
         httpBodies: [],
         cookies: false,
@@ -220,15 +216,9 @@ export default defineInstrumentation({
     });
   },
   // eve's own capture switches (they gate what eve's telemetry puts on
-  // spans) — driven by the same env flags as Sentry's dataCollection.genAI
-  // so one setting governs content capture end to end.
+  // spans), driven by the same env flags read above.
   recordInputs,
   recordOutputs,
-  // httpIntegration already covers the HTTP edge, so enabling this pairs a
-  // second SERVER span with each inbound request. It is the only cover for the
-  // SSE stream route, which httpIntegration does not span — a trade this demo
-  // declines to keep one span per request.
-  traceChannelRequests: false,
   events: {
     "step.started"(input) {
       // Only a turn's first step arrives with kind channel:slack — the
@@ -281,7 +271,7 @@ export default defineInstrumentation({
       return {
         runtimeContext: {
           // Lands on every AI span namespaced by eve + Sentry as
-          // vercel.ai.settings.context.slack.channel_id / .slack.user_id.
+          // ai.settings.context.slack.channel_id / .slack.user_id.
           "slack.channel_id": identity.channelId ?? "",
           "slack.user_id": identity.userId ?? "",
         },

@@ -106,7 +106,7 @@ export default defineTool({
         "meal.store": choice.name,
         "meal.store_id": choice.storeId,
       };
-      if (conv?.threadTs) attributes["gen_ai.conversation.id"] = conv.threadTs;
+      if (conv?.conversationId) attributes["gen_ai.conversation.id"] = conv.conversationId;
       if (conv?.userId) attributes["user.id"] = conv.userId;
       Sentry.logger.info("meal.restaurant.presented", attributes);
     }

@@ -19,12 +19,6 @@ function recordsContent(value: string | undefined): boolean {
 }
 
 export const GEN_AI_CONTENT_CAPTURE = {
-  inputs: recordsContent(
-    process.env.SENTRY_AI_RECORD_INPUTS ??
-      process.env.NEXT_PUBLIC_SENTRY_AI_RECORD_INPUTS,
-  ),
-  outputs: recordsContent(
-    process.env.SENTRY_AI_RECORD_OUTPUTS ??
-      process.env.NEXT_PUBLIC_SENTRY_AI_RECORD_OUTPUTS,
-  ),
+  inputs: recordsContent(process.env.SENTRY_AI_RECORD_INPUTS),
+  outputs: recordsContent(process.env.SENTRY_AI_RECORD_OUTPUTS),
 };

@@ -157,7 +157,7 @@ export default defineTool({
       };
       if (option.calories != null) attributes["meal.calories"] = Math.round(option.calories);
       if (option.proteinG != null) attributes["meal.protein_g"] = Math.round(option.proteinG);
-      if (conv?.threadTs) attributes["gen_ai.conversation.id"] = conv.threadTs;
+      if (conv?.conversationId) attributes["gen_ai.conversation.id"] = conv.conversationId;
       if (conv?.userId) attributes["user.id"] = conv.userId;
       Sentry.logger.info("meal.option.presented", attributes);
     }

@@ -40,6 +40,7 @@ type CorrelationTags = {
 	'flue.parent_session.name'?: string;
 	'flue.operation.id'?: string;
 	'flue.task.id'?: string;
+	'flue.turn.id'?: string;
 };
 
 type IncidentContext = {
@@ -153,31 +154,15 @@ const redactedContentSchema = v.pipe(redactedJsonSchema, v.parseJson());
 
 const logAttributeSchema = v.union([v.string(), v.number(), v.boolean()]);
 
-// A thrown primitive carries its whole payload in its text.
-const thrownPrimitiveSchema = v.pipe(
-	v.union([v.string(), v.number(), v.boolean()]),
-	v.transform((value) => String(value)),
-);
-
-const failureInfoSchema = v.object({
-	type: v.optional(v.string()),
-	name: v.optional(v.string()),
-	code: v.optional(v.string()),
-	message: v.optional(v.string()),
-	stack: v.optional(v.string()),
-});
-
 Sentry.init({
 	dsn: process.env.SENTRY_DSN,
 	environment: process.env.SENTRY_ENVIRONMENT ?? process.env.NODE_ENV,
-	release: process.env.SENTRY_RELEASE,
 	tracesSampleRate,
 	// Only the categories to switch off; the rest stay on. Inbound request
 	// bodies also need httpIntegration's maxIncomingRequestBodySize.
 	// https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/#dataCollection
 	// https://docs.sentry.io/platforms/javascript/guides/node/configuration/integrations/http/#maxincomingrequestbodysize
 	dataCollection: {
-		genAI: { inputs: recordInputs, outputs: recordOutputs },
 		httpHeaders: { request: false, response: false },
 		httpBodies: [],
 		cookies: false,
@@ -262,7 +247,7 @@ instrument({
 			}
 		}
 		if (event.type === 'operation' && event.isError) {
-			const failure = event.errorInfo ?? parseFailure(event.error) ?? UNCLASSIFIED_FAILURE;
+			const failure = event.errorInfo ?? UNCLASSIFIED_FAILURE;
 			const fingerprint = failureFingerprint(failure);
 			if (event.submissionId !== undefined) {
 				if (capturedFailuresBySubmission.get(event.submissionId)?.has(fingerprint)) return;
@@ -308,26 +293,24 @@ instrument({
 // `gen_ai.client.operation.exception` records (a model call that failed and was
 // retried) land in Sentry Logs. Content capture is on by default in the
 // adapter; `contentPolicy()` narrows it per direction and redacts.
-if (tracesSampleRate > 0) {
-	instrument(
-		createOpenTelemetryInstrumentation({
-			content: contentPolicy(),
-			logger: {
-				emit: (record) => {
-					// The adapter emits its own `flue.submission_recovery` record for
-					// every recovery event. `recordRecoveryLog` already reports those
-					// with the full correlation tags, the attempt counts, and an error
-					// level for 'terminated', so the adapter's copy is a strict subset.
-					if (record.eventName === 'flue.submission_recovery') return;
-					// OTel severity numbers: the ERROR band starts at 17, WARN at 13.
-					const severity = record.severityNumber ?? 0;
-					const level = severity >= 17 ? 'error' : severity >= 13 ? 'warn' : 'info';
-					Sentry.logger[level](record.eventName, record.attributes);
-				},
+instrument(
+	createOpenTelemetryInstrumentation({
+		content: contentPolicy(),
+		logger: {
+			emit: (record) => {
+				// The adapter emits its own `flue.submission_recovery` record for
+				// every recovery event. `recordRecoveryLog` already reports those
+				// with the full correlation tags, the attempt counts, and an error
+				// level for 'terminated', so the adapter's copy is a strict subset.
+				if (record.eventName === 'flue.submission_recovery') return;
+				// OTel severity numbers: the ERROR band starts at 17, WARN at 13.
+				const severity = record.severityNumber ?? 0;
+				const level = severity >= 17 ? 'error' : severity >= 13 ? 'warn' : 'info';
+				Sentry.logger[level](record.eventName, record.attributes);
 			},
-		}),
-	);
-}
+		},
+	}),
+);
 
 // A coordinator retrying or reconciling a stuck submission — not yet a
 // terminal outcome, and 'deferred'/'agent_unavailable' recur on every retry
@@ -357,7 +340,6 @@ function captureTerminalFailure(
 ): void {
 	Sentry.withScope((scope) => {
 		scope.setTags(tags);
-		scope.setLevel('error');
 		scope.setTag('error.type', failureType(failure));
 		if (context) scope.setContext('flue.incident', context);
 		Sentry.captureException(toError(failure));
@@ -378,6 +360,7 @@ function correlationTags(event: FlueObservation): CorrelationTags {
 	if (event.parentSession) tags['flue.parent_session.name'] = event.parentSession;
 	if (event.operationId) tags['flue.operation.id'] = event.operationId;
 	if (event.taskId) tags['flue.task.id'] = event.taskId;
+	if (event.turnId) tags['flue.turn.id'] = event.turnId;
 	return tags;
 }
 
@@ -413,7 +396,6 @@ function rememberCapturedFailure(submissionId: string, fingerprint: string): voi
 // direction disabled there must not reach a span from here either. The 16 KiB
 // cap tightens the adapter's own 56 KiB per-attribute budget.
 function contentPolicy(): ContentOption {
-	if (!recordInputs && !recordOutputs) return false;
 	return {
 		transform(content, scope) {
 			if (isInputContent(scope.contentType) && !recordInputs) return undefined;
@@ -442,18 +424,6 @@ function isOutputContent(contentType: GenAIContentType): boolean {
 		contentType === 'exception_message' ||
 		contentType === 'exception_stacktrace'
 	);
-}
-
-// The boundary for `operation` failures: flue types `event.error` as unknown
-// because it is whatever the operation threw. Parse it here into the classified
-// shape the rest of this file branches on.
-function parseFailure(cause: unknown): Error | FlueErrorInfo | undefined {
-	if (cause instanceof Error) return cause;
-	const primitive = v.safeParse(thrownPrimitiveSchema, cause);
-	if (primitive.success) return { type: UNCLASSIFIED_FAILURE.type, message: primitive.output };
-	const parsed = v.safeParse(failureInfoSchema, cause);
-	if (!parsed.success) return undefined;
-	return { ...parsed.output, type: parsed.output.type ?? UNCLASSIFIED_FAILURE.type };
 }
 
 // The settlement's durable error is already a domain value; it only lacks the

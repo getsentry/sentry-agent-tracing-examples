@@ -1,6 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
 import { DEMO_USER } from "lib/demo-user";
-import { GEN_AI_CONTENT_CAPTURE } from "lib/sentry-content-capture";
 
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -9,18 +8,7 @@ Sentry.init({
   tracesSampleRate: 1.0,
   replaysSessionSampleRate: 1.0,
   replaysOnErrorSampleRate: 1.0,
-  enableLogs: true,
-  // Same set as sentry.server.config.ts. `userInfo` stays on, so ingest infers
-  // the visitor's IP and user agent — switch it off for real visitors.
-  dataCollection: {
-    genAI: GEN_AI_CONTENT_CAPTURE,
-    httpHeaders: { request: false, response: false },
-    httpBodies: [],
-    cookies: false,
-    urlQueryParams: false,
-    graphQL: { document: false, variables: false },
-    stackFrameVariables: false,
-  },
+  dataCollection: { userInfo: true },
   integrations: [
     // Required for `traceLifecycle: "stream"` in the browser: nothing listens
     // for finished spans without it, so all of them are dropped. Node wires
