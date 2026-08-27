@@ -148,15 +148,9 @@ export default defineInstrumentation({
       dsn: process.env.SENTRY_DSN,
       environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? "development",
       tracesSampleRate: envRate("SENTRY_TRACES_SAMPLE_RATE", 1.0),
-      // Vercel Workflow's own spans for calls the http and fetch integrations
-      // already cover. These are the names eve sets; Sentry rewrites them to
-      // `METHOD target` after this test runs.
-      ignoreSpans: [
-        { name: "workflow.route.flow" },
-        { name: /^http (GET|POST|PUT|PATCH|DELETE|HEAD)$/ },
-        { name: "workflow.stream.write" },
-        { name: "workflow.stream.read.connect" },
-      ],
+      // No ignoreSpans on purpose: every span eve and Vercel Workflow emit is
+      // kept so the full inventory is visible. The README lists what shows up
+      // and what a future eve integration would want to drop.
       // Only the categories to switch off; the rest stay on. Inbound request
       // bodies also need httpIntegration's maxIncomingRequestBodySize.
       // https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/#dataCollection

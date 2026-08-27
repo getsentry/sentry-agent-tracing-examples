@@ -126,29 +126,55 @@ no provider event carries the Slack thread, channel, or user, so moving to it
 buys the flush and costs the conversation grouping and user attribution below.
 This demo keeps the config layout for that reason.
 
-**One span per HTTP call** (`ignoreSpans`). Vercel Workflow, vendored inside
-eve, opens its own CLIENT and SERVER spans around every workflow request and
-stream write. Sentry rewrites the name of any CLIENT or SERVER span that
-carries `http.request.method` to `METHOD target`, and a `manual` origin does
-not exempt it. Sentry's `httpIntegration` and `nativeNodeFetchIntegration`
-already cover those same calls through Node's diagnostics channel, so each
-request arrives twice under one name, the second copy nested inside the first.
-`ignoreSpans` drops eve's copy. It matches the names eve gives the spans, not
-the rewritten ones, because the test runs when the span starts — which needs
-`traceLifecycle: "stream"`. Children of a dropped span are re-linked to its
-parent, so nothing is orphaned. Measured on one `workflowEntry` run in
-production: 44 spans without it, 34 with it, same tree otherwise. Removing the
-two HTTP integrations instead also removes the pairs, but it takes the model
-call, both endpoints, and trace propagation with them.
+**Every span is kept** (no `ignoreSpans`). Vercel Workflow, vendored inside
+eve, emits a lot around each turn, and this demo keeps all of it so the full
+inventory is visible. Measured on one `eve dev` message with a single model
+call (eve 0.34.0, `@sentry/node` 10.70.0): 69 spans, 4 of them AI
+(`ai.eve.turn`, `gen_ai.invoke_agent`, `gen_ai.agent_step`, `gen_ai.chat`),
+in [this trace](https://sentry-developer-experience.sentry.io/explore/traces/trace/7e3d69d9ae1e452197360845f79e8d26).
+The rest, and what a future eve integration would do with each group:
 
-Comparing both halves of a pair in production, the dropped span carries one
-attribute the kept one does not — `peer.service`, which repeats
-`server.address`. Everything that carries eve's own meaning stays:
-`workflow.execute`, `step.execute`, `world.events.create`,
-`workflow.stream.flush`, `hook.resume`, `queue.publish`, `workflow.route.init`.
-Eve's `traceChannelRequests` is left off for the same reason, with one known
-cost: it is the only span source for the SSE stream route, which
-`httpIntegration` does not cover.
+- **Duplicate HTTP pairs.** Workflow opens its own CLIENT and SERVER spans
+  around every workflow request and stream write, named `http GET`/`http POST`,
+  `workflow.route.flow`, `workflow.stream.write`, `workflow.stream.read.connect`.
+  Sentry rewrites any CLIENT or SERVER span that carries `http.request.method`
+  to `METHOD target`, so each request arrives twice under one name, eve's copy
+  nested inside the copy from `httpIntegration` / `nativeNodeFetchIntegration`.
+  Eve's copy carries one extra attribute, `peer.service`, which repeats
+  `server.address`. Measured in production: 44 spans with the pairs, 34
+  without. A drop rule must match the name eve sets, not the rewritten one.
+- **Step bookkeeping.** `workflow.stream.flush` (13 per turn),
+  `workflow.stream.read.complete`, `workflow.loadEvents`,
+  `workflow.loadNewEvents`, `workflow.run`, `workflow.route.get_world`,
+  `step.hydrate`, `step.dehydrate`. All under 25 ms. Not all leaves:
+  `step.hydrate` parents the flushes and the stream read, and `loadEvents`,
+  `loadNewEvents` and `workflow.run` each parent an event-store call, so a
+  drop rule has to take the parent and its children together. Present
+  deployed too (14 days of production: 237 flushes, 285 `loadNewEvents`, 551
+  `route.get_world`).
+- **`eve dev` only: the event store.** The dev server is its own Workflow
+  "world", so every event-store read and write is an `http.client` call to
+  `/eve/v1/dev/internal/workflow-world` on itself: 33 of the 68 spans.
+  Deployed, the world is Vercel's service and those calls appear as `world.*`
+  spans (`world.events.create` and friends), which carry eve's own meaning.
+
+Spans that carry eve's meaning and that any integration should keep:
+`workflow.execute`, `step.execute`, `ai.eve.turn`, the `gen_ai.*` tree, the
+model's outbound HTTP call, `hook.resume`, `queue.publish`,
+`workflow.route.init`, `world.*`.
+
+Two SDK details matter for whoever writes the drop rules. With
+`traceLifecycle: "stream"` the SDK evaluates `ignoreSpans` when a span
+*starts*, so a rule sees the start-time name and attributes: a fetch span
+starts as plain `POST` with no `op`, and only an `attributes` rule on
+`url.full` can match it. And a dropped span's children are re-linked to its
+parent only inside one stream batch, so a rule that drops a parent must drop
+its children too, or they arrive orphaned in a later batch. Dropping all
+three groups above on the same message gave 12 spans with the AI tree and
+the model call intact.
+Eve's `traceChannelRequests` is left off because `httpIntegration` already
+covers those calls, with one known cost: it is the only span source for the
+SSE stream route, which `httpIntegration` does not cover.
 
 **One conversation is one Slack thread.** `beforeSendSpan` stamps
 `gen_ai.conversation.id` on the AI spans, which is what groups them in
