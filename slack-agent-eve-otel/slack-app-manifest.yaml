@@ -1,0 +1,36 @@
+# Slack app manifest for Mealbot (create app "From a manifest" at api.slack.com/apps).
+# request_url points at the Vercel production deployment. To develop locally,
+# swap both request_url values for the tunnel host instead — one Slack app can
+# only deliver to one URL at a time.
+display_information:
+  name: Mealbot
+  description: "DoorDash ordering bot: ask for a meal or post a group-order link, pick from 3 in-budget options"
+  background_color: "#eb1700"
+features:
+  bot_user:
+    display_name: mealbot
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read # app_mention events
+      - chat:write # post replies in threads
+      - im:history # message.im events (DMs)
+      - im:write # eve delivers HITL/auth prompts via DM
+      - channels:history # message.channels events — the post-a-link-no-mention trigger + thread context
+      - groups:history # same, for private channels
+      - users:read # users.info — real display name on Sentry user context (add users:read.email too if email is wanted)
+settings:
+  interactivity: # "Pick N" buttons on the options card; payloads POST to the same eve route
+    is_enabled: true
+    request_url: https://mealbot.sentry.dev/eve/v1/slack
+  event_subscriptions:
+    request_url: https://mealbot.sentry.dev/eve/v1/slack
+    bot_events:
+      - app_mention
+      - message.im
+      - message.channels
+      - message.groups
+  org_deploy_enabled: false
+  socket_mode_enabled: false # eve's Slack channel is webhook-based; Socket Mode must stay off
+  token_rotation_enabled: false
