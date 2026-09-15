@@ -14,6 +14,12 @@ the same `gen_ai.*` span model.
 Every model call goes through OpenRouter. Each demo is a self-contained npm
 project — there is no workspace root.
 
+## Prerelease Mistral Example
+
+[`mistral-support/`](mistral-support/) is a prerelease terminal support-agent
+example for Sentry's native Mistral integration. It has its own setup and
+release requirements.
+
 ## What the three have in common
 
 - `gen_ai.conversation.id` is the conversation key on all three signals in
