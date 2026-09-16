@@ -52,7 +52,7 @@ Built on the [Next.js Commerce](https://github.com/vercel/commerce) template
 
 ## Setup
 
-Requires Node.js >= 22.
+Requires Node.js >= 22.12.0.
 
 ```bash
 npm install

@@ -1,0 +1,22 @@
+{
+  "name": "mistral-support",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.12"
+  },
+  "scripts": {
+    "start": "node --env-file=.env --import ./instrument.ts app.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint"
+  },
+  "dependencies": {
+    "@mistralai/mistralai": "2.7.0",
+    "@sentry/node": "11.0.0-rc.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.4",
+    "oxlint": "1.78.0",
+    "typescript": "7.0.2"
+  }
+}

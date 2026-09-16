@@ -14,6 +14,12 @@ the same `gen_ai.*` span model.
 Every model call goes through OpenRouter. Each demo is a self-contained npm
 project — there is no workspace root.
 
+## Mistral Example
+
+[`mistral-support/`](mistral-support/) is a TypeScript terminal support agent
+that uses Sentry's native Mistral integration. It calls Mistral directly and
+includes its own setup instructions. The SDK examples use Sentry `11.0.0-rc.0`.
+
 ## What the three have in common
 
 - `gen_ai.conversation.id` is the conversation key on all three signals in

@@ -8,13 +8,16 @@ Sentry.init({
   tracesSampleRate: 1.0,
   replaysSessionSampleRate: 1.0,
   replaysOnErrorSampleRate: 1.0,
-  dataCollection: { userInfo: true },
+  dataCollection: {
+    userInfo: true,
+    httpHeaders: { request: false, response: false },
+    httpBodies: [],
+    cookies: false,
+    urlQueryParams: false,
+    graphQL: { document: false, variables: false },
+    stackFrameVariables: false,
+  },
   integrations: [
-    // Required for `traceLifecycle: "stream"` in the browser: nothing listens
-    // for finished spans without it, so all of them are dropped. Node wires
-    // this up on its own, and v11's browser SDK adds it for you.
-    // https://github.com/getsentry/sentry-agent-tracing-examples/issues/18
-    Sentry.spanStreamingIntegration(),
     // Unmasked because the storefront shows no real user data; keep the
     // defaults in apps with actual PII. This outranks GEN_AI_CONTENT_CAPTURE
     // above: a replay records answers as they are painted, so switching span
