@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@mistralai/mistralai": "2.7.0",
-    "@sentry/node": "latest"
+    "@sentry/node": "11.0.0-rc.0"
   },
   "devDependencies": {
     "@types/node": "24.13.4",

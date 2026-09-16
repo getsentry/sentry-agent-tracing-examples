@@ -4,8 +4,9 @@ A terminal support assistant that looks up two fictional orders. Sentry's native
 Mistral integration traces the model calls; the baseline app has no manual
 application spans.
 
-This draft cannot run with the released Sentry SDK yet. It requires the native
-integration described in the [release note](#release-note).
+This example uses Sentry JavaScript SDK `11.0.0-rc.0`, which includes native
+Mistral instrumentation. Dependencies are pinned in `pnpm-lock.yaml`.
+The integration is enabled by default when tracing is enabled.
 
 ## Before You Start
 
@@ -63,8 +64,9 @@ and the second model call does not start. The next question retries normally.
 ## Privacy
 
 This demo records inputs and outputs because all order data is fictional.
-Set `recordInputs` and `recordOutputs` to `false` in `instrument.ts` to exclude
-that content. If you connect `tracing.ts`, omit or redact its tool argument and
+Set `dataCollection.genAI.inputs` and `dataCollection.genAI.outputs` to `false`
+in `instrument.ts` to exclude that content. HTTP body and local-variable capture
+are disabled separately. If you connect `tracing.ts`, omit or redact its tool argument and
 result attributes separately; the integration options do not control them.
 
 ## Files
@@ -75,6 +77,7 @@ result attributes separately; the integration options do not control them.
 - `app.ts` runs the terminal conversation.
 - `tracing.ts` contains the optional agent and tool helpers.
 
-## Release Note
+## SDK Version
 
-The native integration in this demo depends on [Sentry JavaScript PR #24243](https://github.com/getsentry/sentry-javascript/pull/24243). It must be released before this example is merged. `@sentry/node` uses the `latest` draft placeholder; pin it to the first supporting release and verify live Mistral traces in Sentry before merge.
+The native integration is included in the [v11 release candidate](https://docs.sentry.io/platforms/javascript/migration/v10-to-v11/).
+Update the pinned SDK and lockfile when v11 becomes stable.

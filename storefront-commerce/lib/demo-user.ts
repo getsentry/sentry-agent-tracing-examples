@@ -3,6 +3,7 @@
 // the matching customer row in lib/db.
 
 export interface Shopper {
+  [key: string]: unknown;
   id: string;
   username: string;
   email: string;

@@ -3,10 +3,9 @@ import * as Sentry from "@sentry/node";
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
   tracesSampleRate: 1.0,
-  integrations: [
-    Sentry.mistralAIIntegration({
-      recordInputs: true,
-      recordOutputs: true,
-    }),
-  ],
+  dataCollection: {
+    genAI: { inputs: true, outputs: true },
+    httpBodies: [],
+    stackFrameVariables: false,
+  },
 });

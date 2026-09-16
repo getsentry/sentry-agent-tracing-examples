@@ -91,8 +91,9 @@ agent/
 
 ### How the AI spans reach Sentry
 
-`agent/instrumentation.ts` runs at server startup, and its `Sentry.init`
-registers the global OpenTelemetry tracer provider. There is no official
+`agent/instrumentation.ts` runs at server startup, and its `Sentry.init` uses
+`enableOpenTelemetrySetup: true` to register the global OpenTelemetry tracer
+provider. There is no official
 Eve + Sentry integration; this composes both sides' documented primitives.
 
 Eve calls `registerTelemetry` with `@ai-sdk/otel`, so the AI SDK emits an OTel

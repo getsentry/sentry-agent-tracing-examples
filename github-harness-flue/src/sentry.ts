@@ -158,11 +158,13 @@ Sentry.init({
 	dsn: process.env.SENTRY_DSN,
 	environment: process.env.SENTRY_ENVIRONMENT ?? process.env.NODE_ENV,
 	tracesSampleRate,
+	enableOpenTelemetrySetup: true,
 	// Only the categories to switch off; the rest stay on. Inbound request
 	// bodies also need httpIntegration's maxIncomingRequestBodySize.
 	// https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/#dataCollection
 	// https://docs.sentry.io/platforms/javascript/guides/node/configuration/integrations/http/#maxincomingrequestbodysize
 	dataCollection: {
+		genAI: { inputs: recordInputs, outputs: recordOutputs },
 		httpHeaders: { request: false, response: false },
 		httpBodies: [],
 		cookies: false,
@@ -177,9 +179,7 @@ Sentry.init({
 	// The adapter parks non-object tool payloads on vendor `flue.tool.call.*`
 	// attributes, which Sentry's AI views don't read (withastro/flue#568).
 	//
-	// withStreamedSpan is required — a bare callback silently downgrades
-	// traceLifecycle to 'static'.
-	beforeSendSpan: Sentry.withStreamedSpan((span) => {
+	beforeSendSpan: (span) => {
 		const attributes = span.attributes;
 		if (attributes) {
 			for (const kind of ['arguments', 'result'] as const) {
@@ -215,8 +215,7 @@ Sentry.init({
 			}
 		}
 		return span;
-	}),
-	enableLogs: true,
+	},
 	integrations: (defaults) =>
 		defaults.filter((integration) => !SENTRY_AI_PROVIDER_INTEGRATIONS.has(integration.name)),
 });
@@ -284,8 +283,8 @@ instrument({
 	},
 });
 
-// `Sentry.init` registered Sentry as the global OTel tracer provider, so
-// Flue's spans flow to Sentry without further wiring. Only that tracer seam is
+// `enableOpenTelemetrySetup` registers Sentry as the global OTel tracer
+// provider, so Flue's spans flow to Sentry without further wiring. Only that tracer seam is
 // wired: @sentry/node registers no global OTel *meter* provider, so the
 // adapter's `gen_ai.client.token.usage` and `*.duration` instruments are API
 // no-ops and their metrics are dropped — token usage still reaches Sentry as

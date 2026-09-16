@@ -70,6 +70,7 @@ const usersInfoSchema = z.looseObject({
 });
 
 interface SlackUserContext {
+  [key: string]: unknown;
   id: string;
   username?: string;
   email?: string;
@@ -140,14 +141,14 @@ function trackSlackProfile(userId: string, scope: Sentry.Scope): void {
 export default defineInstrumentation({
   // Names the agent in Sentry's AI views.
   functionId: AGENT_NAME,
-  // Runs at server startup, before any agent code. Sentry.init registers a
-  // global OpenTelemetry tracer provider, so eve's AI SDK telemetry spans
-  // (ai.eve.turn > ai.streamText > ai.toolCall) go to Sentry's exporter.
+  // Runs at server startup, before any agent code. Eve emits its AI SDK
+  // telemetry through OpenTelemetry, so Sentry must register its provider.
   setup: () => {
     Sentry.init({
       dsn: process.env.SENTRY_DSN,
       environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? "development",
       tracesSampleRate: envRate("SENTRY_TRACES_SAMPLE_RATE", 1.0),
+      enableOpenTelemetrySetup: true,
       // No ignoreSpans on purpose: every span eve and Vercel Workflow emit is
       // kept so the full inventory is visible. The README lists what shows up
       // and what a future eve integration would want to drop.
@@ -156,6 +157,7 @@ export default defineInstrumentation({
       // https://docs.sentry.io/platforms/javascript/guides/node/configuration/options/#dataCollection
       // https://docs.sentry.io/platforms/javascript/guides/node/configuration/integrations/http/#maxincomingrequestbodysize
       dataCollection: {
+        genAI: { inputs: recordInputs, outputs: recordOutputs },
         httpHeaders: { request: false, response: false },
         httpBodies: [],
         cookies: false,
@@ -171,9 +173,7 @@ export default defineInstrumentation({
       // eve opens the turn span before step.started runs, so it can arrive
       // carrying the previous turn's id.
       //
-      // withStreamedSpan is required — a bare callback silently downgrades
-      // traceLifecycle to 'static'.
-      beforeSendSpan: Sentry.withStreamedSpan((span) => {
+      beforeSendSpan: (span) => {
         const attributes = span.attributes;
         if (!attributes) return span;
         // eve names its agent span after the model it called, not the agent.
@@ -192,12 +192,11 @@ export default defineInstrumentation({
         attributes["gen_ai.conversation.id"] = conv.conversationId;
         if (conv.userId) attributes["user.id"] = conv.userId;
         return span;
-      }),
+      },
       // Logs are domain wide events only (meal.option.presented and
       // meal.pick.added in the tools) — the mechanical record (tool args,
       // tokens, models) already lives on the auto-instrumented spans; logs
       // add the business layer spans can't carry.
-      enableLogs: envFlag("SENTRY_ENABLE_LOGS", true),
       // eve registers @ai-sdk/otel itself and emits the full gen_ai.* tree.
       // VercelAI, a default integration, subscribes to the same telemetry over
       // the ai:telemetry channel and opens a second tree beside it, carrying

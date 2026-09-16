@@ -14,11 +14,11 @@ the same `gen_ai.*` span model.
 Every model call goes through OpenRouter. Each demo is a self-contained npm
 project — there is no workspace root.
 
-## Prerelease Mistral Example
+## Mistral Example
 
-[`mistral-support/`](mistral-support/) is a prerelease terminal support-agent
-example for Sentry's native Mistral integration. It has its own setup and
-release requirements.
+[`mistral-support/`](mistral-support/) is a TypeScript terminal support agent
+that uses Sentry's native Mistral integration. It calls Mistral directly and
+includes its own setup instructions. The SDK examples use Sentry `11.0.0-rc.0`.
 
 ## What the three have in common
 

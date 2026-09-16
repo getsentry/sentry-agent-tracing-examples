@@ -9,7 +9,6 @@ Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
   tracesSampleRate: 1.0,
   traceLifecycle: "stream",
-  enableLogs: true,
   // Same set as sentry.server.config.ts.
   dataCollection: {
     genAI: GEN_AI_CONTENT_CAPTURE,

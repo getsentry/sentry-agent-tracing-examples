@@ -11,7 +11,6 @@ Sentry.init({
   // rebuilt from a finished transaction.
   // https://github.com/getsentry/sentry-agent-tracing-examples/issues/15
   traceLifecycle: "stream",
-  enableLogs: true,
   // Only the categories to switch off; the rest stay on. Inbound request
   // bodies also need httpIntegration's maxIncomingRequestBodySize.
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#dataCollection
