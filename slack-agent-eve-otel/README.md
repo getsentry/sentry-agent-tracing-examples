@@ -6,11 +6,12 @@ same tools, same prompts. The one difference is how spans leave the process:
 | | slack-agent-eve | slack-agent-eve-otel |
 |---|---|---|
 | Exporter | `@sentry/node` SDK, `traceLifecycle: "stream"` | `@vercel/otel` `OTLPHttpProtoTraceExporter` to Sentry's OTLP intake |
-| Setup | `Sentry.init` in `agent/instrumentation.ts` | `registerOTel` per https://eve.dev/integrations/sentry-instrumentation |
+| Setup | `Sentry.init` in `agent/instrumentation.ts` | `otelIntegration` in `agent/instrumentation/sentry.ts` per https://eve.dev/integrations/sentry-instrumentation |
 | Sentry project | `slack-agent-eve` | `slack-agent-eve-otel` |
 | `beforeSendSpan`, `Sentry.logger`, `captureException`, scope user | yes | none (no SDK) |
 
-`functionId` and the `step.started` hook that records the Slack thread are kept
+`functionId` (`agent/instrumentation/otel.ts`) and the `runtimeContext` resolver
+that records the Slack thread (`agent/instrumentation/sentry.ts`) are kept
 so `gen_ai.agent.name` and the card tools behave the same in both.
 
 ## Run both side by side
@@ -62,3 +63,25 @@ Same span tree, same `gen_ai.*` attributes, same ops. Differences:
   own segment with `span.op: http`, not `gen_ai.invoke_agent`. The OTLP path
   gave all three `invoke_agent` spans the right op.
 - No `sentry.origin`, no logs, no error events in the OTLP path.
+
+## What changed on eve 0.63.0 (2026-09-21)
+
+eve 0.62 removed `agent/instrumentation.ts`, and `eve build` fails when the
+file exists. This app now uses `agent/instrumentation/`: `otel.ts` holds
+`functionId` and `tracePolicy`, and `sentry.ts` holds the OTLP exporter and the
+`runtimeContext` resolver that replaces the `step.started` hook.
+`../slack-agent-eve` stays on eve 0.34.0 for now. On eve 0.63 its setup cannot
+work: eve refuses to start when `Sentry.init` registers the tracer provider.
+
+Two `eve invoke` turns against `eve start` showed:
+
+- **`gen_ai.conversation.id` now exists in the OTLP path.** eve sets it to the
+  session id on `invoke_agent` and `chat` spans, so Explore > Conversations can
+  group this project too. `user.id` is still SDK only.
+- **`span.description` is filled on the `gen_ai.*` spans.**
+- **`invoke_agent` is named after the agent, but after eve's runtime agent
+  name** (the package name, `doordash-agent-otel`), and `gen_ai.agent.name` on
+  that span has the same value. `functionId` still names the `chat` spans
+  (`mealbot`), so one turn carries two agent names.
+- Inputs and outputs are recorded on `chat` spans with an explicit
+  `tracePolicy`.

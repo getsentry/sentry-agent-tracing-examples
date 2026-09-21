@@ -43,7 +43,7 @@ export default defineTool({
     // A separate cheap model call, nested inside this tool's execute_tool
     // span. eve's own telemetry registration means every AI SDK call in the
     // process is covered; the span's gen_ai op comes from the beforeSendSpan
-    // derivation in agent/instrumentation.ts, since this demo filters the
+    // derivation in ../slack-agent-eve/agent/instrumentation.ts, since that demo filters the
     // vercelAI integration out.
     //
     // functionId does not reach Sentry: eve stamps gen_ai.agent.name from the
