@@ -1,6 +1,6 @@
 /**
  * Conversation identity of a turn, keyed by that turn's trace id.
- * instrumentation.ts writes the Slack thread at step.started; tool code and
+ * instrumentation/sentry.ts writes the Slack thread in runtimeContext; tool code and
  * beforeSendSpan read it back.
  *
  * The trace id is the only key both sides can agree on. beforeSendSpan runs

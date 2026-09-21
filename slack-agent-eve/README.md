@@ -68,7 +68,12 @@ sanitized `--intent` string — Slack message text never goes into it.
 agent/
 ├── agent.ts                 model: OpenRouter anthropic/claude-sonnet-5
 ├── instructions.md          system prompt (Mealbot persona + both flows)
-├── instrumentation.ts       Sentry.init + conversation id, user, Slack context per step
+├── instrumentation/
+│   ├── otel.ts              eve's tracing: agent name, Sentry sampler and propagator, inputs and outputs
+│   ├── sentry.ts            Sentry span processor + conversation id, user, Slack context per step
+│   └── flush.ts             Sentry.flush() before a session idles
+├── lib/sentry.ts            Sentry.init, shared by the instrumentation files
+├── lib/env.ts               env flag and sample rate parsing
 ├── lib/dd.ts                dd-cli runner (local or Vercel Sandbox), search, budget, cart mapping
 ├── lib/conversation.ts      conversation id of a turn (Slack thread, else session id), keyed by the turn's trace id
 ├── lib/slack-blocks.ts      the Block Kit shapes the cards post, and chat.postMessage
@@ -91,23 +96,31 @@ agent/
 
 ### How the AI spans reach Sentry
 
-`agent/instrumentation.ts` runs at server startup, and its `Sentry.init` uses
-`enableOpenTelemetrySetup: true` to register the global OpenTelemetry tracer
-provider. There is no official
-Eve + Sentry integration; this composes both sides' documented primitives.
+eve 0.62 removed the single `agent/instrumentation.ts`; `eve build` fails when
+the file exists. Instrumentation now lives in `agent/instrumentation/`, one
+file per destination, and eve owns the global OpenTelemetry tracer provider.
+eve refuses to start beside a second provider, so `Sentry.init`
+(`agent/lib/sentry.ts`) sets `skipOpenTelemetrySetup: true` and Sentry joins
+eve's pipeline in three places: `SentrySampler` and `SentryPropagator` in
+`instrumentation/otel.ts`, and `SentrySpanProcessor` in
+`instrumentation/sentry.ts`. The processor hands each of eve's spans to the
+SDK, so `beforeSendSpan`, the scopes, and `tracesSampleRate` apply to them.
+This composes both sides' documented primitives on `@sentry/node` 10; the
+classes are gone in `@sentry/node` 11, where eve exports over OTLP as
+`../slack-agent-eve-otel` does.
 
 Eve calls `registerTelemetry` with `@ai-sdk/otel`, so the AI SDK emits an OTel
 span per model call and tool call (`ai.eve.turn`, `ai.streamText`,
-`ai.toolCall`) through that provider. Three settings in that file make those
-spans usable.
+`ai.toolCall`) through that provider. Three settings in `Sentry.init` make
+those spans usable.
 
 **Only one producer.** `ai` 7 also publishes the same telemetry to Node's
 `ai:telemetry` diagnostics channel, and Sentry's `VercelAI` integration is on
 by default and subscribes to it. That opens a second `gen_ai.*` tree beside
 eve's for the same work — same `gen_ai.usage.*` on both copies, so every model
-call counts twice in the spend dashboard and the AI detectors. Eve's telemetry
-has no off switch (`otelSettings` is enabled by this file existing), so the
-integration is what `integrations` filters out.
+call counts twice in the spend dashboard and the AI detectors. Eve's spans
+are the ones this demo keeps, so the integration is what `integrations`
+filters out.
 
 **Spans stream** (`traceLifecycle: "stream"`), leaving one at a time as they
 end rather than bundled into the enclosing transaction. That is the ingest
@@ -117,14 +130,13 @@ spend queries, and in front of the AI detectors. Confirmed in Sentry for both
 an `eve dev` run and a Slack turn on the deployment.
 
 Streamed spans leave through a buffer that drains on a five-second timer, on
-size, or on an explicit `Sentry.flush()`. Eve's config-layout instrumentation
-ends at `step.started`, so there is no end-of-turn hook to flush from: on a
-serverless host the last spans of a turn wait for the next invocation to thaw
-the function, and an isolate that is reclaimed instead of reused loses them.
-Eve's provider layout (`experimental.instrumentationProviders`) adds a `flush()`
-hook that eve awaits before a session idles. The two layouts are exclusive, and
-no provider event carries the Slack thread, channel, or user, so moving to it
-buys the flush and costs the conversation grouping and user attribution below.
+size, or on an explicit `Sentry.flush()`. On a serverless host the last spans
+of a turn would wait for the next invocation to thaw the function, and an
+isolate that is reclaimed instead of reused loses them.
+`instrumentation/flush.ts` closes that gap: eve awaits a provider's `flush()`
+before a session idles. The Slack thread, channel, and user come from the
+`runtimeContext` resolver in `instrumentation/sentry.ts`, which receives the
+same input the removed `step.started` hook did.
 This demo keeps the config layout for that reason.
 
 **Every span is kept** (no `ignoreSpans`). Vercel Workflow, vendored inside
@@ -184,7 +196,7 @@ one conversation; anything else (the local TUI, `eve invoke`) falls back to
 eve's session id, which likewise spans every turn of that conversation. A
 delegated subagent runs in its own session and is attributed to the root, so
 delegating does not split a conversation in two. The value is resolved in
-`step.started` and handed over by trace id, because `beforeSendSpan` can run
+the `runtimeContext` resolver and handed over by trace id, because `beforeSendSpan` can run
 in eve's replay context where the scope that recorded it is not reachable.
 Only a turn's first step carries the Slack thread, so the thread is cached per
 session in this process: a continuation step that lands in a cold isolate falls
@@ -270,7 +282,7 @@ it through a tunnel (Eve's own docs only cover deployed webhooks):
 
 One trace per agent turn under **Explore > Traces**, agent aggregates under
 **Insights > AI Agents**, and each Slack thread grouped in
-**Explore > Conversations** (`instrumentation.ts` sets the thread `ts` as
+**Explore > Conversations** (`instrumentation/sentry.ts` sets the thread `ts` as
 `gen_ai.conversation.id` and the Slack user id as the user). The span names of
 one Slack turn:
 
