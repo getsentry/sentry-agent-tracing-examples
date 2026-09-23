@@ -7,7 +7,7 @@ the same `gen_ai.*` span model.
 
 | Directory | Framework | Runs in | Shows |
 | --- | --- | --- | --- |
-| [`slack-agent-eve/`](slack-agent-eve/) | [Eve](https://eve.dev) 0.34, `@sentry/node` | Slack, plus the local `eve dev` TUI | A DoorDash ordering agent driving `dd-cli` (in a Vercel Sandbox when deployed). Eve's AI SDK telemetry maps onto `gen_ai.*` spans; a Slack thread is one Sentry Conversation; the `estimate_nutrition` tool makes its own nested model call; each pick is a `meal.pick.added` log with calories and protein. |
+| [`slack-agent-eve/`](slack-agent-eve/) | [Eve](https://eve.dev) 0.63, `@sentry/node` | Slack, plus the local `eve dev` TUI | A DoorDash ordering agent driving `dd-cli` (in a Vercel Sandbox when deployed). Sentry's eve provider (`Sentry.eveInstrumentation`) emits the `gen_ai.*` spans; a Slack thread is one Sentry Conversation; the `estimate_nutrition` tool makes its own nested model call; each pick is a `meal.pick.added` log with calories and protein. |
 | [`storefront-commerce/`](storefront-commerce/) | AI SDK 7 on Next.js 16, `@sentry/nextjs` | Browser chat panel in a storefront | Agent tracing beside ordinary app tracing: hand-built `db.query` spans nest under the tool that opened them, tool results render as generative UI, one chat session is one Conversation, and `refundOrder` has a planted bug that raises a real issue. |
 | [`github-harness-flue/`](github-harness-flue/) | [Flue](https://flueframework.com) 2.0, `@sentry/node` | GitHub Action (`flue run`) | A headless PR reviewer: the `review-lead` agent delegates to two parallel subagents (`correctness-reviewer`, `style-reviewer`). One file wires Sentry end to end — spans, logs, and issues that all carry matching `flue.*` tags — and the agent code holds no Sentry calls of its own. |
 
@@ -61,7 +61,7 @@ every token is counted twice in the spend dashboard and the AI detectors.
 | App | Emitter | Sentry AI integrations |
 | --- | --- | --- |
 | `storefront-commerce` | Sentry's `vercelAIIntegration()` | on by default — it is the emitter |
-| `slack-agent-eve` | Eve's `@ai-sdk/otel` | `VercelAI` filtered off |
+| `slack-agent-eve` | Sentry's `vercelAIIntegration()`, through `Sentry.eveInstrumentation()` | on by default — it is the emitter |
 | `github-harness-flue` | `@flue/opentelemetry` | all seven filtered off |
 
 All three set `traceLifecycle: "stream"`, the default from v11. Use it for agent

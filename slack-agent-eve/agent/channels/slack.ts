@@ -1,11 +1,20 @@
 import * as Sentry from "@sentry/node";
 import { slackChannel } from "eve/channels/slack";
 import { CART_LINK_RE } from "../lib/dd";
+import { rememberSlackSession } from "../lib/conversation";
 
 // Credentials fall back to SLACK_BOT_TOKEN / SLACK_SIGNING_SECRET from the
 // environment. Slack delivers events to /eve/v1/slack on the deployment.
 export default slackChannel({
   threadContext: { since: "last-agent-reply" },
+  // eve hydrates `channel.state` from the session's durable state on every
+  // event, so a continuation step that lands in a cold process still learns
+  // its thread before its tools run: actions.requested precedes every tool call.
+  events: {
+    "turn.started": (_data, channel, ctx) => rememberSlackSession(ctx.session.id, channel.state),
+    "actions.requested": (_data, channel, ctx) =>
+      rememberSlackSession(ctx.session.id, channel.state),
+  },
   // Mentions and DMs dispatch anonymously ({auth: null}) instead of through
   // eve's defaults, which attach a Slack auth context: mentions on that
   // default path were dropped without a turn or a log line, while every

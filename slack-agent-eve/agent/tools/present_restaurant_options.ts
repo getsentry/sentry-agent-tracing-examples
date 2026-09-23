@@ -44,8 +44,8 @@ export default defineTool({
     craving: z.string().min(1).describe('What they asked for, echoed back — e.g. "sushi"'),
     choices: z.array(choiceSchema).min(2).max(4),
   }),
-  async execute({ triggerMessageTs, craving, choices }) {
-    const thread = activeSlackThread();
+  async execute({ triggerMessageTs, craving, choices }, ctx) {
+    const thread = activeSlackThread(ctx);
     if (thread === undefined) {
       return {
         posted: false,
@@ -98,7 +98,7 @@ export default defineTool({
     );
     postedCards.set(dedupeKey, posted.ts ?? "posted");
 
-    const conv = activeConversation();
+    const conv = activeConversation(ctx);
     for (const [index, choice] of choices.entries()) {
       const attributes: RestaurantOptionLog = {
         "meal.craving": craving,
@@ -106,8 +106,8 @@ export default defineTool({
         "meal.store": choice.name,
         "meal.store_id": choice.storeId,
       };
-      if (conv?.conversationId) attributes["gen_ai.conversation.id"] = conv.conversationId;
-      if (conv?.userId) attributes["user.id"] = conv.userId;
+      attributes["gen_ai.conversation.id"] = conv.conversationId;
+      if (conv.userId) attributes["user.id"] = conv.userId;
       Sentry.logger.info("meal.restaurant.presented", attributes);
     }
 
