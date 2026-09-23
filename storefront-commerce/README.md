@@ -55,7 +55,7 @@ Built on the [Next.js Commerce](https://github.com/vercel/commerce) template
 Requires Node.js >= 22.12.0.
 
 ```bash
-npm install
+pnpm install
 cp .env.example .env.local   # then fill in:
 #   OPENROUTER_API_KEY       — required for the assistant
 #   NEXT_PUBLIC_SENTRY_DSN   — required to send traces to Sentry
@@ -68,7 +68,7 @@ source maps — without it, stack traces in Sentry stay minified.
 ## Run
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 Browse the store, click the sparkles button (bottom right), and try:

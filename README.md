@@ -11,7 +11,7 @@ the same `gen_ai.*` span model.
 | [`storefront-commerce/`](storefront-commerce/) | AI SDK 7 on Next.js 16, `@sentry/nextjs` | Browser chat panel in a storefront | Agent tracing beside ordinary app tracing: hand-built `db.query` spans nest under the tool that opened them, tool results render as generative UI, one chat session is one Conversation, and `refundOrder` has a planted bug that raises a real issue. |
 | [`github-harness-flue/`](github-harness-flue/) | [Flue](https://flueframework.com) 2.0, `@sentry/node` | GitHub Action (`flue run`) | A headless PR reviewer: the `review-lead` agent delegates to two parallel subagents (`correctness-reviewer`, `style-reviewer`). One file wires Sentry end to end — spans, logs, and issues that all carry matching `flue.*` tags — and the agent code holds no Sentry calls of its own. |
 
-Every model call goes through OpenRouter. Each demo is a self-contained npm
+Every model call goes through OpenRouter. Each demo is a self-contained pnpm
 project — there is no workspace root.
 
 ## Mistral Example
@@ -75,7 +75,7 @@ and `ignoreTransactions` are never called — use `beforeSendSpan` and
 
 ```bash
 cd <demo>
-npm install
+pnpm install
 cp .env.example .env        # storefront-commerce: .env.local
 ```
 
@@ -105,7 +105,7 @@ send, so the script works against any project that sends them.
 
 ## Working in the repo
 
-Each demo has `npm run lint` (oxlint) and `npm run typecheck`. Run both from
+Each demo has `pnpm lint` (oxlint) and `pnpm typecheck`. Run both from
 the demo directory.
 
 ## Where to look next

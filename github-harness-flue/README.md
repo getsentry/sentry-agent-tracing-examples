@@ -41,30 +41,30 @@ github-workflow/review.yml   The GitHub Actions workflow
 Requires Node >= 22.19.0.
 
 ```sh
-npm install
+pnpm install
 cp .env.example .env   # then fill in OPENROUTER_API_KEY and SENTRY_DSN
 ```
 
 ## Run
 
 ```sh
-npm run demo             # review fixtures/sample.diff
-npm run demo:fix         # review fixtures/fix.diff — the Sentry impact path
-npm run demo:tool-error  # review a path that does not exist — the tool-failure path
+pnpm demo             # review fixtures/sample.diff
+pnpm demo:fix         # review fixtures/fix.diff — the Sentry impact path
+pnpm demo:tool-error  # review a path that does not exist — the tool-failure path
 ```
 
-`npm run demo` runs the whole harness against `fixtures/sample.diff` (the fixture hides an
+`pnpm demo` runs the whole harness against `fixtures/sample.diff` (the fixture hides an
 off-by-one retry loop, a dropped `response.ok` check, and assorted style problems for the subagents
 to find) and writes the finished review to `review.md`. Progress streams to stderr; the final
 verdict prints to stdout. Exit code 0 means the submission completed — a failed agent fails the CI
 step naturally.
 
-`npm run demo:fix` reviews the diff that repairs those defects. With the three `SENTRY_*` MCP
+`pnpm demo:fix` reviews the diff that repairs those defects. With the three `SENTRY_*` MCP
 variables set, the lead matches the changed lines against the open issues of
 `SENTRY_APP_PROJECT_SLUG` and resolves the ones this diff fixes, so the trace carries
 `mcp__sentry__update_issue` spans and the review carries a populated "Sentry impact" section.
 
-`npm run demo:tool-error` asks for `fixtures/latest.diff`, which does not exist. The `read_diff`
+`pnpm demo:tool-error` asks for `fixtures/latest.diff`, which does not exist. The `read_diff`
 tool throws, and the failure lands in three places: the `execute_tool` span ends with error status
 and `exception.*` attributes, the error text goes back to the model as the tool result, and the
 agent recovers by falling back to `fixtures/sample.diff`. No Sentry Issue is raised — this harness
@@ -82,7 +82,7 @@ workflow-provided `GITHUB_TOKEN`.
 
 ## What you'll see in Sentry
 
-One trace per review, in the AI Agents dashboard. The tree below is a local `npm run demo`
+One trace per review, in the AI Agents dashboard. The tree below is a local `pnpm demo`
 against the fixture (turn count varies with the model's plan). The workflow tags its runs
 `environment: ci`.
 
