@@ -18,7 +18,7 @@ project — there is no workspace root.
 
 [`mistral-support/`](mistral-support/) is a TypeScript terminal support agent
 that uses Sentry's native Mistral integration. It calls Mistral directly and
-includes its own setup instructions. The SDK examples use Sentry `11.0.0-rc.0`.
+includes its own setup instructions. The SDK examples use Sentry `11.0.0`.
 
 ## What the three have in common
 
