@@ -1,0 +1,7 @@
+minimumReleaseAgeExclude:
+  - '@sentry/bundler-plugins@11.0.0'
+  - '@sentry/core@11.0.0'
+  - '@sentry/node@11.0.0'
+  - '@sentry/opentelemetry@11.0.0'
+  - '@sentry/server-runtime-injection@11.0.0'
+  - '@sentry/server-utils@11.0.0'

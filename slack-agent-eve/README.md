@@ -216,7 +216,7 @@ Note that the exported token expires after a few days.
 
 ## Setup
 
-1. `npm install`
+1. `pnpm install`
 2. `cp .env.example .env` and fill in:
    - `OPENROUTER_API_KEY` — agent model + nutrition-estimate model
    - `SENTRY_DSN` — Sentry project (Node.js platform), Settings > Client Keys
@@ -229,15 +229,15 @@ Note that the exported token expires after a few days.
 ## Run
 
 ```bash
-npm run dev          # eve dev — local server + TUI; exercises the full loop incl. dd-cli
-npx eve invoke "Options for this group order please: https://drd.sh/cart/XXXX/"  # one-shot
+pnpm dev          # eve dev — local server + TUI; exercises the full loop incl. dd-cli
+pnpm eve invoke "Options for this group order please: https://drd.sh/cart/XXXX/"  # one-shot
 
-npm run typecheck    # tsc --noEmit
-npm run lint         # oxlint
+pnpm typecheck    # tsc --noEmit
+pnpm lint         # oxlint
 ```
 
 `eve invoke` kills its own server child before the SDK can flush, so a one-shot
-run can lose spans. `npm run dev` and a deployment do not.
+run can lose spans. `pnpm dev` and a deployment do not.
 
 In the TUI, paste a group-order link the signed-in account hosts. The bot
 should resolve the cart, fetch the menu, and propose three options.
@@ -256,7 +256,7 @@ it through a tunnel (Eve's own docs only cover deployed webhooks):
    your machine until step 3 passes.
 2. Put `SLACK_BOT_TOKEN` (xoxb-…) and `SLACK_SIGNING_SECRET` (Basic
    Information > App Credentials — not the xapp- app token) in `.env`, then
-   start the agent (`npm run dev`) and a tunnel to its port, e.g.
+   start the agent (`pnpm dev`) and a tunnel to its port, e.g.
    `cloudflared tunnel --url http://localhost:3000`.
 3. In App Settings, set both request URLs to
    `https://<tunnel-host>/eve/v1/slack` — Event Subscriptions (Slack sends its

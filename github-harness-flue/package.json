@@ -16,7 +16,7 @@
 		"@flue/opentelemetry": "2.0.3",
 		"@flue/runtime": "2.0.3",
 		"@opentelemetry/api": "1.9.1",
-		"@sentry/node": "11.0.0-rc.0",
+		"@sentry/node": "11.0.0",
 		"valibot": "1.4.2"
 	},
 	"devDependencies": {

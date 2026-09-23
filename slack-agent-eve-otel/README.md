@@ -18,9 +18,9 @@ so `gen_ai.agent.name` and the card tools behave the same in both.
 
 ```bash
 # terminal 1
-cd ../slack-agent-eve && portless eve-sdk npx eve dev --no-ui
+cd ../slack-agent-eve && portless eve-sdk pnpm eve dev --no-ui
 # terminal 2
-cd ../slack-agent-eve-otel && portless eve-otel npx eve dev --no-ui
+cd ../slack-agent-eve-otel && portless eve-otel pnpm eve dev --no-ui
 ```
 
 `eve invoke --url` treats a non-loopback URL as a Vercel deployment, so send the
@@ -28,8 +28,8 @@ prompt to the raw port each server prints (`server listening at http://127.0.0.1
 
 ```bash
 P='estimate the nutrition of a chicken burrito bowl, then tell me the protein in one sentence.'
-npx eve invoke --url http://127.0.0.1:<sdk-port> "$P" &
-npx eve invoke --url http://127.0.0.1:<otel-port> "$P" &
+pnpm eve invoke --url http://127.0.0.1:<sdk-port> "$P" &
+pnpm eve invoke --url http://127.0.0.1:<otel-port> "$P" &
 wait
 ```
 

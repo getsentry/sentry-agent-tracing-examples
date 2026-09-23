@@ -4,7 +4,7 @@ A terminal support assistant that looks up two fictional orders. Sentry's native
 Mistral integration traces the model calls; the baseline app has no manual
 application spans.
 
-This example uses Sentry JavaScript SDK `11.0.0-rc.0`, which includes native
+This example uses Sentry JavaScript SDK `11.0.0`, which includes native
 Mistral instrumentation. Dependencies are pinned in `pnpm-lock.yaml`.
 The integration is enabled by default when tracing is enabled.
 
