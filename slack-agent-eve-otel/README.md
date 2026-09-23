@@ -6,7 +6,7 @@ same tools, same prompts. The one difference is how spans leave the process:
 | | slack-agent-eve | slack-agent-eve-otel |
 |---|---|---|
 | Exporter | `@sentry/node` SDK, `traceLifecycle: "stream"` | `@vercel/otel` `OTLPHttpProtoTraceExporter` to Sentry's OTLP intake |
-| Setup | `Sentry.init` in `agent/lib/sentry.ts`, Sentry's OTel pieces in `agent/instrumentation/` | `otelIntegration` in `agent/instrumentation/sentry.ts` per https://eve.dev/integrations/sentry-instrumentation |
+| Setup | `Sentry.init` in `agent/instrumentation.ts` | `otelIntegration` in `agent/instrumentation/sentry.ts` per https://eve.dev/integrations/sentry-instrumentation |
 | Sentry project | `slack-agent-eve` | `slack-agent-eve-otel` |
 | `beforeSendSpan`, `Sentry.logger`, `captureException`, scope user | yes | none (no SDK) |
 
@@ -18,9 +18,9 @@ so `gen_ai.agent.name` and the card tools behave the same in both.
 
 ```bash
 # terminal 1
-cd ../slack-agent-eve && portless eve-sdk npx eve dev --no-ui
+cd ../slack-agent-eve && portless eve-sdk pnpm eve dev --no-ui
 # terminal 2
-cd ../slack-agent-eve-otel && portless eve-otel npx eve dev --no-ui
+cd ../slack-agent-eve-otel && portless eve-otel pnpm eve dev --no-ui
 ```
 
 `eve invoke --url` treats a non-loopback URL as a Vercel deployment, so send the
@@ -28,8 +28,8 @@ prompt to the raw port each server prints (`server listening at http://127.0.0.1
 
 ```bash
 P='estimate the nutrition of a chicken burrito bowl, then tell me the protein in one sentence.'
-npx eve invoke --url http://127.0.0.1:<sdk-port> "$P" &
-npx eve invoke --url http://127.0.0.1:<otel-port> "$P" &
+pnpm eve invoke --url http://127.0.0.1:<sdk-port> "$P" &
+pnpm eve invoke --url http://127.0.0.1:<otel-port> "$P" &
 wait
 ```
 
@@ -67,17 +67,21 @@ Same span tree, same `gen_ai.*` attributes, same ops. Differences:
 ## What changed on eve 0.63.0 (2026-09-21)
 
 eve 0.62 removed `agent/instrumentation.ts`, and `eve build` fails when the
-file exists. Both apps now use `agent/instrumentation/`. Two `eve invoke` turns
-per app against `eve start` showed:
+file exists. This app now uses `agent/instrumentation/`: `otel.ts` holds
+`functionId` and `tracePolicy`, and `sentry.ts` holds the OTLP exporter and the
+`runtimeContext` resolver that replaces the `step.started` hook.
+`../slack-agent-eve` stays on eve 0.34.0 for now. On eve 0.63 its setup cannot
+work: eve refuses to start when `Sentry.init` registers the tracer provider.
+
+Two `eve invoke` turns against `eve start` showed:
 
 - **`gen_ai.conversation.id` now exists in the OTLP path.** eve sets it to the
   session id on `invoke_agent` and `chat` spans, so Explore > Conversations can
-  group the OTLP project too. `user.id` is still SDK only.
-- **`span.description` is filled on the OTLP `gen_ai.*` spans.**
-- **`invoke_agent` is named after the agent in both paths, but after eve's
-  runtime agent name** (the package name, `doordash-agent-otel`), and
-  `gen_ai.agent.name` on that span has the same value. `functionId` still names
-  the `chat` spans (`mealbot`), so one turn carries two agent names. The SDK
-  app corrects the span in `beforeSendSpan`; this app has no hook to do it.
-- Inputs and outputs are recorded on `chat` spans in both paths with an
-  explicit `tracePolicy`.
+  group this project too. `user.id` is still SDK only.
+- **`span.description` is filled on the `gen_ai.*` spans.**
+- **`invoke_agent` is named after the agent, but after eve's runtime agent
+  name** (the package name, `doordash-agent-otel`), and `gen_ai.agent.name` on
+  that span has the same value. `functionId` still names the `chat` spans
+  (`mealbot`), so one turn carries two agent names.
+- Inputs and outputs are recorded on `chat` spans with an explicit
+  `tracePolicy`.

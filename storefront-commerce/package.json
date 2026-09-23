@@ -17,7 +17,7 @@
     "@headlessui/react": "^2.2.0",
     "@heroicons/react": "^2.2.0",
     "@openrouter/ai-sdk-provider": "3.0.0",
-    "@sentry/nextjs": "11.0.0-rc.0",
+    "@sentry/nextjs": "11.0.0",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",
     "@streamdown/math": "^1.0.2",
