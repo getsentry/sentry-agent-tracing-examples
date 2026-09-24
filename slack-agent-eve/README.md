@@ -156,7 +156,8 @@ Vercel Sandbox** when deployed, authenticated by `DD_CLI_ACCESS_TOKEN` from
 `dd-cli export-token`; one sandbox is reused across invocations. Set
 `DD_CLI_SANDBOX=0` locally to force the installed binary — `eve deploy`
 rewrites `.env.local` with Vercel's system variables, `VERCEL=1` included.
-Note that the exported token expires after a few days.
+Note that the exported token expires after a few days. Set `DD_CLI_FIXTURES=1`
+on the deployment to skip the sandbox and the token altogether.
 
 ## Requirements
 
@@ -195,6 +196,11 @@ pnpm lint         # oxlint
 
 `eve invoke` kills its own server child before the SDK can flush, so a one-shot
 run can lose spans. `pnpm dev` and a deployment do not.
+
+`DD_CLI_FIXTURES=1` answers every dd-cli call from `agent/lib/dd-fixtures.ts` instead of the
+CLI: three restaurants, their menus, and an in-memory cart. Use it to run the agent, the cards
+and the Sentry spans with no DoorDash account. Everything else, model calls included, stays
+real.
 
 In the TUI, paste a group-order link the signed-in account hosts. The bot
 should resolve the cart, fetch the menu, and propose three options.

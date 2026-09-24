@@ -11,7 +11,8 @@
     "dev": "eve dev",
     "start": "eve start",
     "lint": "oxlint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke:fixtures": "tsx scripts/dd-fixtures-smoke.ts"
   },
   "dependencies": {
     "@openrouter/ai-sdk-provider": "3.0.0",
@@ -26,6 +27,7 @@
     "@types/node": "24.x",
     "microsandbox": "^0.5.10",
     "oxlint": "1.78.0",
+    "tsx": "^4.23.15",
     "typescript": "7.0.2"
   },
   "engines": {

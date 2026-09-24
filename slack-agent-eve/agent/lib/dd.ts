@@ -3,6 +3,8 @@ import { promisify } from "node:util";
 import * as Sentry from "@sentry/node";
 import { APIError, Sandbox } from "@vercel/sandbox";
 import { z } from "zod";
+import { fixtureResult } from "./dd-fixtures";
+import { envFlag } from "./env";
 
 const execFileAsync = promisify(execFile);
 
@@ -147,6 +149,7 @@ async function runDdLocally(argv: string[]): Promise<string> {
  * outcomes stay in the parsed payload for the model to relay.
  */
 async function runDd<T>(args: string[], payload: z.ZodType<T>): Promise<T> {
+  if (envFlag("DD_CLI_FIXTURES", false)) return payload.parse(fixtureResult(args));
   const argv = ["--json-output", ...args, "--intent", INTENT];
   const stdout = runsInSandbox() ? await runDdInSandbox(argv) : await runDdLocally(argv);
   const envelope = ddEnvelopeSchema.parse(JSON.parse(stdout));
