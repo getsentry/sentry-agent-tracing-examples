@@ -1,5 +1,5 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { generateObject } from "ai";
+import { Output, generateText } from "ai";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
@@ -41,18 +41,18 @@ export default defineTool({
   }),
   async execute({ items }) {
     // A separate cheap model call, nested inside this tool's execute_tool
-    // span. Sentry's vercelAI integration covers every AI SDK call in the
-    // process, so this one arrives as its own generate_content span.
+    // span. Sentry's vercelAI integration listens on the AI SDK's telemetry
+    // tracing channel; in ai 7.0.x generateText publishes to it and
+    // generateObject does not, so structured output goes through generateText
+    // with Output.object to get a generate_content span at all.
     //
-    // functionId does not reach Sentry as the agent name
-    // (getsentry/sentry-javascript#20041), so this call arrives under the
-    // agent's own. In Sentry the only things that set it apart are the model
-    // id and its parent execute_tool span, so filter on gen_ai.request.model
-    // to see it alone.
-    const { object } = await generateObject({
+    // functionId becomes the invoke_agent span name and gen_ai.function_id.
+    // gen_ai.agent.name stays empty on every span on this path
+    // (getsentry/sentry-javascript#20041).
+    const { output } = await generateText({
       model: openrouter.chat(process.env.NUTRITION_MODEL ?? "openai/gpt-5.6-luna"),
       telemetry: { functionId: "nutrition-estimator" },
-      schema: estimatesSchema,
+      output: Output.object({ schema: estimatesSchema }),
       prompt: [
         "Estimate the nutrition of each restaurant menu item below as typically served (one serving, as delivered).",
         "Use the description for portion and ingredient hints. Round calories to the nearest 10.",
@@ -61,7 +61,7 @@ export default defineTool({
       ].join("\n"),
     });
     return {
-      estimates: object.estimates.map((e) => ({ ...e, calories: Math.round(e.calories) })),
+      estimates: output.estimates.map((e) => ({ ...e, calories: Math.round(e.calories) })),
     };
   },
 });

@@ -86,7 +86,7 @@ agent/
     ├── resolve_group_cart.ts      link → cart UUID + store + budget (cart list/show)
     ├── get_menu.ts                menu with prices + photos (menu --store-id)
     ├── get_item_details.ts        modifiers with per-option prices (restaurant-item-details)
-    ├── estimate_nutrition.ts      nested OpenRouter generateObject call → calories/macros
+    ├── estimate_nutrition.ts      nested OpenRouter generateText call → calories/macros
     ├── present_meal_options.ts    Block Kit card (photos!) via chat.postMessage
     ├── add_to_cart.ts             code-enforced budget guard → cart add-items
     ├── preview_order.ts           read-only pricing (order preview)
