@@ -68,11 +68,15 @@ sanitized `--intent` string — Slack message text never goes into it.
 agent/
 ├── agent.ts                 model: OpenRouter anthropic/claude-sonnet-5
 ├── instructions.md          system prompt (Mealbot persona + both flows)
-├── instrumentation.ts       Sentry.init + conversation id, user, Slack context per step
+├── instrumentation/
+│   └── sentry.ts            Sentry.eveInstrumentation: Sentry.init at startup, conversation id per step, flush before idle
+├── hooks/
+│   └── sentry.ts            Slack user and conversation tag on the Sentry scope, once per step
+├── lib/env.ts               env flag and sample rate parsing
 ├── lib/dd.ts                dd-cli runner (local or Vercel Sandbox), search, budget, cart mapping
-├── lib/conversation.ts      conversation id of a turn (Slack thread, else session id), keyed by the turn's trace id
+├── lib/conversation.ts      Slack thread and user of a session, recorded by the channel, read by the card tools
+├── lib/slack-user.ts        Slack display name lookup for Sentry's User column
 ├── lib/slack-blocks.ts      the Block Kit shapes the cards post, and chat.postMessage
-├── lib/agent-name.ts        the agent's name in Sentry's AI views
 ├── channels/
 │   ├── slack.ts             Slack channel; dispatches on group-cart links without a mention
 │   └── eve.ts               HTTP channel auth (dev TUI / eve invoke)
@@ -82,7 +86,7 @@ agent/
     ├── resolve_group_cart.ts      link → cart UUID + store + budget (cart list/show)
     ├── get_menu.ts                menu with prices + photos (menu --store-id)
     ├── get_item_details.ts        modifiers with per-option prices (restaurant-item-details)
-    ├── estimate_nutrition.ts      nested OpenRouter generateObject call → calories/macros
+    ├── estimate_nutrition.ts      nested OpenRouter generateText call → calories/macros
     ├── present_meal_options.ts    Block Kit card (photos!) via chat.postMessage
     ├── add_to_cart.ts             code-enforced budget guard → cart add-items
     ├── preview_order.ts           read-only pricing (order preview)
@@ -91,105 +95,58 @@ agent/
 
 ### How the AI spans reach Sentry
 
-`agent/instrumentation.ts` runs at server startup, and its `Sentry.init` uses
-`enableOpenTelemetrySetup: true` to register the global OpenTelemetry tracer
-provider. There is no official
-Eve + Sentry integration; this composes both sides' documented primitives.
+`@sentry/node` 11 ships an eve provider. `agent/instrumentation/sentry.ts`
+passes `Sentry.eveInstrumentation(options)` to `defineInstrumentation`. eve
+loads every file in `agent/instrumentation/` at server startup, so the
+provider's `setup` runs `Sentry.init` before the agent and its tools load. The
+provider's `turn.started` and `step.attempt.started` handlers set the eve
+session id as the Sentry conversation id on every step, and its `flush` drains
+the span buffer before a session idles.
 
-Eve calls `registerTelemetry` with `@ai-sdk/otel`, so the AI SDK emits an OTel
-span per model call and tool call (`ai.eve.turn`, `ai.streamText`,
-`ai.toolCall`) through that provider. Three settings in that file make those
-spans usable.
+The SDK owns the OpenTelemetry setup. There is no `otel.ts` beside it: with no
+`otel()` or `otelIntegration()` file in `agent/instrumentation/`, eve registers
+no tracer provider of its own, and Sentry's `vercelAIIntegration` reads the AI
+SDK's telemetry directly. One model call is one `gen_ai.*` tree. Measured on a
+two-turn `eve dev` run on 2026-09-24 (eve 0.63.0, `@sentry/node` 11.0.0): 151
+spans, 4 of them AI, one `invoke_agent mealbot` and one `generate_content
+anthropic/claude-sonnet-5` per turn, both carrying the session id as
+`gen_ai.conversation.id`. The other 147 are `http.client` and `http.server`
+spans from `httpIntegration`; 108 of them are the dev server's calls to its own
+event store at `/eve/v1/dev/internal/workflow-world`, which a deployment does
+not make. eve's own `workflow.*` and `ai.eve.turn` spans belong to the eve
+tracer provider and do not appear.
 
-**Only one producer.** `ai` 7 also publishes the same telemetry to Node's
-`ai:telemetry` diagnostics channel, and Sentry's `VercelAI` integration is on
-by default and subscribes to it. That opens a second `gen_ai.*` tree beside
-eve's for the same work — same `gen_ai.usage.*` on both copies, so every model
-call counts twice in the spend dashboard and the AI detectors. Eve's telemetry
-has no off switch (`otelSettings` is enabled by this file existing), so the
-integration is what `integrations` filters out.
+Three options in the file matter for agent tracing.
+
+**Content capture.** `SENTRY_AI_RECORD_INPUTS` and `SENTRY_AI_RECORD_OUTPUTS`
+set `dataCollection.genAI` and `vercelAIIntegration({ recordInputs,
+recordOutputs })`. Outside `eve dev`, eve passes `recordInputs: false` and
+`recordOutputs: false` to every AI SDK call, and the per-call value wins over
+`dataCollection`. The integration option is what keeps prompts and completions
+on a deployment.
 
 **Spans stream** (`traceLifecycle: "stream"`), leaving one at a time as they
 end rather than bundled into the enclosing transaction. That is the ingest
 path that reads `gen_ai.operation.name` off a span and gives it a matching
-`gen_ai.*` op — and that op is what puts the span in Insights > AI Agents, in
-spend queries, and in front of the AI detectors. Confirmed in Sentry for both
-an `eve dev` run and a Slack turn on the deployment.
+`gen_ai.*` op, and that op is what puts the span in Insights > AI Agents, in
+spend queries, and in front of the AI detectors.
 
-Streamed spans leave through a buffer that drains on a five-second timer, on
-size, or on an explicit `Sentry.flush()`. Eve's config-layout instrumentation
-ends at `step.started`, so there is no end-of-turn hook to flush from: on a
-serverless host the last spans of a turn wait for the next invocation to thaw
-the function, and an isolate that is reclaimed instead of reused loses them.
-Eve's provider layout (`experimental.instrumentationProviders`) adds a `flush()`
-hook that eve awaits before a session idles. The two layouts are exclusive, and
-no provider event carries the Slack thread, channel, or user, so moving to it
-buys the flush and costs the conversation grouping and user attribution below.
-This demo keeps the config layout for that reason.
-
-**Every span is kept** (no `ignoreSpans`). Vercel Workflow, vendored inside
-eve, emits a lot around each turn, and this demo keeps all of it so the full
-inventory is visible. Measured on one `eve dev` message with a single model
-call (eve 0.34.0, `@sentry/node` 10.70.0): 69 spans, 4 of them AI
-(`ai.eve.turn`, `gen_ai.invoke_agent`, `gen_ai.agent_step`, `gen_ai.chat`),
-in [this trace](https://sentry-developer-experience.sentry.io/explore/traces/trace/7e3d69d9ae1e452197360845f79e8d26).
-The rest, and what a future eve integration would do with each group:
-
-- **Duplicate HTTP pairs.** Workflow opens its own CLIENT and SERVER spans
-  around every workflow request and stream write, named `http GET`/`http POST`,
-  `workflow.route.flow`, `workflow.stream.write`, `workflow.stream.read.connect`.
-  Sentry rewrites any CLIENT or SERVER span that carries `http.request.method`
-  to `METHOD target`, so each request arrives twice under one name, eve's copy
-  nested inside the copy from `httpIntegration` / `nativeNodeFetchIntegration`.
-  Eve's copy carries one extra attribute, `peer.service`, which repeats
-  `server.address`. Measured in production: 44 spans with the pairs, 34
-  without. A drop rule must match the name eve sets, not the rewritten one.
-- **Step bookkeeping.** `workflow.stream.flush` (13 per turn),
-  `workflow.stream.read.complete`, `workflow.loadEvents`,
-  `workflow.loadNewEvents`, `workflow.run`, `workflow.route.get_world`,
-  `step.hydrate`, `step.dehydrate`. All under 25 ms. Not all leaves:
-  `step.hydrate` parents the flushes and the stream read, and `loadEvents`,
-  `loadNewEvents` and `workflow.run` each parent an event-store call, so a
-  drop rule has to take the parent and its children together. Present
-  deployed too (14 days of production: 237 flushes, 285 `loadNewEvents`, 551
-  `route.get_world`).
-- **`eve dev` only: the event store.** The dev server is its own Workflow
-  "world", so every event-store read and write is an `http.client` call to
-  `/eve/v1/dev/internal/workflow-world` on itself: 33 of the 68 spans.
-  Deployed, the world is Vercel's service and those calls appear as `world.*`
-  spans (`world.events.create` and friends), which carry eve's own meaning.
-
-Spans that carry eve's meaning and that any integration should keep:
-`workflow.execute`, `step.execute`, `ai.eve.turn`, the `gen_ai.*` tree, the
-model's outbound HTTP call, `hook.resume`, `queue.publish`,
-`workflow.route.init`, `world.*`.
-
-Two SDK details matter for whoever writes the drop rules. With
-`traceLifecycle: "stream"` the SDK evaluates `ignoreSpans` when a span
+**Every span is kept** (no `ignoreSpans`), so the full inventory is visible.
+With `traceLifecycle: "stream"` the SDK evaluates `ignoreSpans` when a span
 *starts*, so a rule sees the start-time name and attributes: a fetch span
 starts as plain `POST` with no `op`, and only an `attributes` rule on
-`url.full` can match it. And a dropped span's children are re-linked to its
-parent only inside one stream batch, so a rule that drops a parent must drop
-its children too, or they arrive orphaned in a later batch. Dropping all
-three groups above on the same message gave 12 spans with the AI tree and
-the model call intact.
-Eve's `traceChannelRequests` is left off because `httpIntegration` already
-covers those calls, with one known cost: it is the only span source for the
-SSE stream route, which `httpIntegration` does not cover.
+`url.full` can match it.
 
-**One conversation is one Slack thread.** `beforeSendSpan` stamps
-`gen_ai.conversation.id` on the AI spans, which is what groups them in
-Explore > Conversations. A Slack turn uses its thread, so the whole thread is
-one conversation; anything else (the local TUI, `eve invoke`) falls back to
-eve's session id, which likewise spans every turn of that conversation. A
-delegated subagent runs in its own session and is attributed to the root, so
-delegating does not split a conversation in two. The value is resolved in
-`step.started` and handed over by trace id, because `beforeSendSpan` can run
-in eve's replay context where the scope that recorded it is not reachable.
-Only a turn's first step carries the Slack thread, so the thread is cached per
-session in this process: a continuation step that lands in a cold isolate falls
-back to the session id and opens a second row for the same thread. Carrying the
-thread in eve's durable session state would remove that.
+**One conversation is one Slack thread.** eve keeps one durable session per
+Slack thread, and the provider sets the session id as `gen_ai.conversation.id`
+on every step, so the whole thread is one row in Explore > Conversations. A
+turn from the local TUI or `eve invoke` has a session too. The Slack user comes
+from the channel: `agent/channels/slack.ts` records the thread and the
+triggering user per session on `turn.started` and `actions.requested`, from
+the channel state eve hydrates on every event, and `agent/hooks/sentry.ts`
+sets that user on the Sentry scope at every `step.started`. The card tools
+read the same record through `activeSlackThread(ctx)`, so the destination of a
+card never comes from a tool argument.
 
 ## Running it deployed
 
@@ -199,7 +156,8 @@ Vercel Sandbox** when deployed, authenticated by `DD_CLI_ACCESS_TOKEN` from
 `dd-cli export-token`; one sandbox is reused across invocations. Set
 `DD_CLI_SANDBOX=0` locally to force the installed binary — `eve deploy`
 rewrites `.env.local` with Vercel's system variables, `VERCEL=1` included.
-Note that the exported token expires after a few days.
+Note that the exported token expires after a few days. Set `DD_CLI_FIXTURES=1`
+on the deployment to skip the sandbox and the token altogether.
 
 ## Requirements
 
@@ -239,6 +197,11 @@ pnpm lint         # oxlint
 `eve invoke` kills its own server child before the SDK can flush, so a one-shot
 run can lose spans. `pnpm dev` and a deployment do not.
 
+`DD_CLI_FIXTURES=1` answers every dd-cli call from `agent/lib/dd-fixtures.ts` instead of the
+CLI: three restaurants, their menus, and an in-memory cart. Use it to run the agent, the cards
+and the Sentry spans with no DoorDash account. Everything else, model calls included, stays
+real.
+
 In the TUI, paste a group-order link the signed-in account hosts. The bot
 should resolve the cart, fetch the menu, and propose three options.
 
@@ -270,36 +233,33 @@ it through a tunnel (Eve's own docs only cover deployed webhooks):
 
 One trace per agent turn under **Explore > Traces**, agent aggregates under
 **Insights > AI Agents**, and each Slack thread grouped in
-**Explore > Conversations** (`instrumentation.ts` sets the thread `ts` as
-`gen_ai.conversation.id` and the Slack user id as the user). The span names of
-one Slack turn:
+**Explore > Conversations** (the eve session id, one per Slack thread, is
+`gen_ai.conversation.id`; `hooks/sentry.ts` sets the Slack user). The span
+names of one Slack turn:
 
 ```
 POST /eve/v1/slack                       http.server — inbound Slack webhook
-└─ eve.turn                              eve's turn span — opened and ended inside step 1
-   └─ invoke_agent mealbot               step 1
-      ├─ chat anthropic/claude-sonnet-5               the model picks a tool
-      └─ execute_tool find_restaurants                shells out to dd-cli
+invoke_agent mealbot                     step 1
+├─ generate_content anthropic/claude-sonnet-5               the model picks a tool
+└─ execute_tool find_restaurants                shells out to dd-cli
 
 invoke_agent mealbot                     step 2 — its own segment of the same trace
-├─ chat anthropic/claude-sonnet-5
+├─ generate_content anthropic/claude-sonnet-5
 └─ execute_tool get_menu
 
 invoke_agent mealbot                     step 3
-├─ chat anthropic/claude-sonnet-5
+├─ generate_content anthropic/claude-sonnet-5
 └─ execute_tool estimate_nutrition
    └─ invoke_agent nutrition-estimator   the tool's own OpenRouter call
-      └─ chat openai/gpt-5.6-luna
+      └─ generate_content openai/gpt-5.6-luna
 ```
 
-Only step 1 runs inside `eve.turn`. Each later step restores the turn's trace
-context as a *remote* parent, which makes it a local root: same trace, own
-segment, exported on its own. That is what lets a turn's later steps reach
-Sentry at all on a serverless runtime.
+Each step is its own segment of the same trace, exported on its own — that is
+what lets a turn's later steps reach Sentry at all on a serverless runtime.
 
 `estimate_nutrition` is the interesting one: its `execute_tool` span contains a
-whole nested agent call, because eve's `registerTelemetry` covers every AI SDK
-call in the process — including one a tool makes itself. Its own
+whole nested agent call, because Sentry's `vercelAIIntegration` covers every AI
+SDK call in the process — including one a tool makes itself. Its own
 `telemetry.functionId` keeps it out of the main loop's aggregates.
 
 Tools also emit domain **logs** (`meal.restaurant.presented`,
@@ -326,8 +286,9 @@ trace — including the duplicate spans above — is invisible until you deploy.
 **A one-shot process delivers nothing.** Streamed spans queue in a buffer that
 drains on a five-second timer, on size, or on `Sentry.flush()`. The timer is
 unref'd, so it never keeps the process alive; `eve invoke` ends its worker with
-`terminate()`, which runs no exit handler; eve's flush hooks in this config
-layout are empty; and `@sentry/node` registers no drain on process exit. One
+`terminate()`, which runs no exit handler; eve calls the provider's `flush`
+before a session idles, not before the process exits; and `@sentry/node`
+registers no drain on process exit. One
 `eve invoke` turn created 989 spans and sent 0. The same code with
 `traceLifecycle` left at its default sent them, because a static transaction is
 built and sent at the end of the request rather than queued per span. The line
@@ -340,7 +301,7 @@ when none is given, so local spans land beside deployed ones unless you set
 `SENTRY_ENVIRONMENT`.
 
 To compare configurations locally, count spans where they are made — in
-`beforeSendSpan`, or on `client.on("spanEnd")` — and never by what reaches
+`vercelAIIntegration`, or on `client.on("spanEnd")` — and never by what reaches
 Sentry. To check the shape of a whole trace, read it from the deployment.
 
 ## Notes and deviations

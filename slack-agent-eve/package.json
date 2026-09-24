@@ -1,5 +1,5 @@
 {
-  "name": "doordash-agent",
+  "name": "mealbot",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,21 +11,23 @@
     "dev": "eve dev",
     "start": "eve start",
     "lint": "oxlint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke:fixtures": "tsx scripts/dd-fixtures-smoke.ts"
   },
   "dependencies": {
     "@openrouter/ai-sdk-provider": "3.0.0",
-    "@sentry/node": "11.0.0-rc.0",
+    "@sentry/node": "^11.0.0",
     "@vercel/otel": "^2.1.3",
     "@vercel/sandbox": "^3.0.0",
     "ai": "^7.0.61",
-    "eve": "0.34.0",
+    "eve": "0.63.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.x",
     "microsandbox": "^0.5.10",
     "oxlint": "1.78.0",
+    "tsx": "^4.23.15",
     "typescript": "7.0.2"
   },
   "engines": {

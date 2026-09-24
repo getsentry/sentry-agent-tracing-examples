@@ -23,7 +23,7 @@ export default defineTool({
     total: z.number().nullish().describe("total from preview_order, when it returned one"),
     currency: z.string().nullish().describe("currency from preview_order, e.g. CAD"),
   }),
-  async execute({ cartUuid, storeName, total, currency }) {
+  async execute({ cartUuid, storeName, total, currency }, ctx) {
     const url = await ddCheckoutUrl(cartUuid);
     if (!url) {
       return {
@@ -32,12 +32,12 @@ export default defineTool({
       };
     }
 
-    const conv = activeConversation();
+    const conv = activeConversation(ctx);
     const attributes: CheckoutOfferedLog = { "meal.store": storeName };
     if (total != null) attributes["meal.total"] = total;
     if (currency) attributes["meal.currency"] = currency;
-    if (conv?.conversationId) attributes["gen_ai.conversation.id"] = conv.conversationId;
-    if (conv?.userId) attributes["user.id"] = conv.userId;
+    attributes["gen_ai.conversation.id"] = conv.conversationId;
+    if (conv.userId) attributes["user.id"] = conv.userId;
     Sentry.logger.info("meal.checkout.offered", attributes);
 
     return { ready: true, checkoutUrl: url };

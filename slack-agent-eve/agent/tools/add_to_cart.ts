@@ -115,7 +115,7 @@ export default defineTool({
       .optional()
       .describe("Selected customization options, from get_item_details"),
   }),
-  async execute({ cartUuid, storeId, menuId, itemId, itemName, quantity: rawQuantity, caloriesEstimate, proteinGEstimate, nestedOptions: rawNestedOptions }) {
+  async execute({ cartUuid, storeId, menuId, itemId, itemName, quantity: rawQuantity, caloriesEstimate, proteinGEstimate, nestedOptions: rawNestedOptions }, ctx) {
     // A group order carries the host's own per-person limit; a personal order
     // has none, so the configured budget applies.
     const budgetUsd = cartUuid
@@ -183,7 +183,7 @@ export default defineTool({
     // Opinionated split: spans stay the auto-instrumented system record;
     // this log wide event is the business record, with numeric attributes
     // so Explore/dashboards/alerts can sum calories and protein per user.
-    const conv = activeConversation();
+    const conv = activeConversation(ctx);
     const attributes: MealPickLog = {
       "meal.item": itemName,
       "meal.quantity": quantity,
@@ -196,8 +196,8 @@ export default defineTool({
     if (proteinGEstimate != null) {
       attributes["meal.protein_g"] = Math.round(proteinGEstimate * quantity);
     }
-    if (conv?.conversationId) attributes["gen_ai.conversation.id"] = conv.conversationId;
-    if (conv?.userId) attributes["user.id"] = conv.userId;
+    attributes["gen_ai.conversation.id"] = conv.conversationId;
+    if (conv.userId) attributes["user.id"] = conv.userId;
     Sentry.logger.info("meal.pick.added", attributes);
 
     return { added: true, itemTotalUsd, budgetUsd, cart: outcome.cart };

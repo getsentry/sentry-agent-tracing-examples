@@ -61,8 +61,8 @@ export default defineTool({
     budgetUsd: z.number().describe("budgetUsd from resolve_group_cart, or the person's own budget"),
     options: z.array(optionSchema).min(2).max(4),
   }),
-  async execute({ triggerMessageTs, storeName, mealLabel: rawMealLabel, budgetUsd, options }) {
-    const thread = activeSlackThread();
+  async execute({ triggerMessageTs, storeName, mealLabel: rawMealLabel, budgetUsd, options }, ctx) {
+    const thread = activeSlackThread(ctx);
     if (thread === undefined) {
       return {
         posted: false,
@@ -145,7 +145,7 @@ export default defineTool({
     // was offered against what got picked (meal.pick.added), by lane,
     // price, and nutrition. The conversation id comes from the turn's own
     // trace, so it always matches the spans.
-    const conv = activeConversation();
+    const conv = activeConversation(ctx);
     for (const [index, option] of options.entries()) {
       const attributes: MealOptionLog = {
         "meal.store": storeName,
@@ -157,8 +157,8 @@ export default defineTool({
       };
       if (option.calories != null) attributes["meal.calories"] = Math.round(option.calories);
       if (option.proteinG != null) attributes["meal.protein_g"] = Math.round(option.proteinG);
-      if (conv?.conversationId) attributes["gen_ai.conversation.id"] = conv.conversationId;
-      if (conv?.userId) attributes["user.id"] = conv.userId;
+      attributes["gen_ai.conversation.id"] = conv.conversationId;
+      if (conv.userId) attributes["user.id"] = conv.userId;
       Sentry.logger.info("meal.option.presented", attributes);
     }
 
