@@ -60,9 +60,17 @@ test("the Mistral integration traces the tool request and the streamed reply", a
   const chats = recorded.filter((span) => span["sentry.op"] === "gen_ai.chat");
 
   assert.equal(chats.length, 2, `expected 2 gen_ai.chat spans, got: ${recorded.map((s) => s["sentry.op"]).join(", ")}`);
-  assert.match(String(chats[0]?.["gen_ai.response.tool_calls"]), /lookup_order/);
-  assert.match(String(chats[1]?.["gen_ai.output.messages"]), /Your Kettle shipped\./);
-  for (const chat of chats) assert.equal(chat["gen_ai.usage.input_tokens"], 11);
+  const [toolRequest, reply] = chats;
+  assert.match(String(toolRequest?.["gen_ai.input.messages"]), /Where is order ORD-1001\?/);
+  assert.match(String(toolRequest?.["gen_ai.tool.definitions"]), /lookup_order/);
+  assert.match(String(toolRequest?.["gen_ai.response.tool_calls"]), /lookup_order/);
+  assert.match(String(reply?.["gen_ai.input.messages"]), /Kettle/, "the second call's input should contain the tool result");
+  assert.match(String(reply?.["gen_ai.output.messages"]), /Your Kettle shipped\./);
+  for (const chat of chats) {
+    assert.equal(chat["gen_ai.request.model"], "mistral-small-latest");
+    assert.equal(chat["gen_ai.usage.input_tokens"], 11);
+    assert.equal(chat["gen_ai.usage.output_tokens"], 5);
+  }
 });
 
 test("the optional helpers add agent and tool spans", async () => {
