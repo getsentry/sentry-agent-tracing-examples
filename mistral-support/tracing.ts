@@ -30,6 +30,7 @@ export function lookupOrder(call: ToolCall, failLookup: boolean): Promise<string
       op: "gen_ai.execute_tool",
       attributes: {
         "gen_ai.operation.name": "execute_tool",
+        "gen_ai.agent.name": "Order Support",
         "gen_ai.tool.name": "lookup_order",
         "gen_ai.tool.call.id": call.id,
         "gen_ai.tool.call.arguments": typeof call.function.arguments === "string"

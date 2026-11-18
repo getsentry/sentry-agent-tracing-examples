@@ -1,0 +1,73 @@
+name: mistral-support
+
+on:
+  pull_request:
+    paths:
+      - mistral-support/**
+      - .github/workflows/mistral-support.yml
+  push:
+    branches: [main]
+    paths:
+      - mistral-support/**
+      - .github/workflows/mistral-support.yml
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: mistral-support
+
+jobs:
+  locked:
+    name: Locked versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: mistral-support/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  latest:
+    name: Latest versions
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # Ignores the ranges in package.json, so a new major version of
+      # either SDK fails here before readers find it.
+      - run: pnpm update --latest
+      - run: pnpm list @sentry/node @mistralai/mistralai
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Open an issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "mistral-support fails with the latest Sentry or Mistral SDK"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$(gh issue list --state open --search "in:title \"$TITLE\"" --json number --jq '.[].number')" ]; then
+            gh issue create --title "$TITLE" --label sentry-sdk --body "The weekly check against the latest versions failed: $RUN_URL"
+          fi
