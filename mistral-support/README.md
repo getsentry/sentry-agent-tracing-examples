@@ -4,9 +4,8 @@ A terminal support assistant that looks up two fictional orders. Sentry's native
 Mistral integration traces the model calls; the baseline app has no manual
 application spans.
 
-This example uses Sentry JavaScript SDK `11.0.0`, which includes native
-Mistral instrumentation. Dependencies are pinned in `pnpm-lock.yaml`.
-The integration is enabled by default when tracing is enabled.
+The integration is enabled by default when tracing is enabled. See
+[Versions](#versions) for the supported SDK versions.
 
 ## Before You Start
 
@@ -76,8 +75,18 @@ result attributes separately; the integration options do not control them.
 - `assistant.ts` makes the two native Mistral calls.
 - `app.ts` runs the terminal conversation.
 - `tracing.ts` contains the optional agent and tool helpers.
+- `spans.test.ts` checks the spans against a mocked Mistral API.
 
-## SDK Version
+## Versions
 
-The native integration is included in the [v11 release candidate](https://docs.sentry.io/platforms/javascript/migration/v10-to-v11/).
-Update the pinned SDK and lockfile when v11 becomes stable.
+`package.json` sets the minimum versions: Sentry JavaScript SDK 11.11.0 or
+later, which traces Mistral SDK 3.x. `pnpm install` uses `pnpm-lock.yaml`, which
+records the latest combination that passed the checks. The
+[supported versions](https://docs.sentry.io/platforms/javascript/guides/node/configuration/integrations/mistral/#supported-versions)
+page lists every Mistral version that the integration traces.
+
+`pnpm test` runs the example against a mocked Mistral API, with no API keys.
+It fails if the installed SDKs do not produce the model, agent, and tool spans
+that this README describes. CI runs it on every change. Each week, Dependabot
+refreshes the lockfile, and CI repeats the test with the latest release of each
+SDK, so a new major version fails in CI before it reaches readers.
